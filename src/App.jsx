@@ -7,13 +7,13 @@ import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calc
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
 try {
-  const firebaseConfig = {
-  apiKey: "AIzaSyBbBGbZqAtm5BJi0FiGavraGhNE04-yf2E",
-  authDomain: "casa-seoul-inventario.firebaseapp.com",
-  projectId: "casa-seoul-inventario",
-  storageBucket: "casa-seoul-inventario.firebasestorage.app",
-  messagingSenderId: "312640933963",
-  appId: "1:312640933963:web:53e3158ba2944b2ab7fdce"
+  const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+    apiKey: "AIzaSyBbBGbZqAtm5BJi0FiGavraGhNE04-yf2E",
+    authDomain: "casa-seoul-inventario.firebaseapp.com",
+    projectId: "casa-seoul-inventario",
+    storageBucket: "casa-seoul-inventario.firebasestorage.app",
+    messagingSenderId: "312640933963",
+    appId: "1:312640933963:web:53e3158ba2944b2ab7fdce"
   };
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
