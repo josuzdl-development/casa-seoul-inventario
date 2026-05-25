@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock } from 'lucide-react';
+import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -26,6 +26,10 @@ try {
 
 // Catálogo base de ejemplo
 const MAESTRO_PRODUCTOS = [
+  { sku: 'ALB-BTS-01', nombre: 'Album Proof (Standard Ed.)', categoria: 'Álbumes', marca: 'BTS' },
+  { sku: 'LS-BTS-01', nombre: 'Official Lightstick MotS', categoria: 'Lightsticks', marca: 'BTS' },
+  { sku: 'PH-ENH-01', nombre: 'Photocard Romance: Untold', categoria: 'Photocards', marca: 'Enhypen' },
+  { sku: 'TEC-APP-01', nombre: 'iPhone 15 Pro Max 256GB', categoria: 'Tecnología', marca: 'Apple' },
 ];
 
 export default function App() {
@@ -49,6 +53,9 @@ export default function App() {
   const [formSalida, setFormSalida] = useState({
     sku: '', cantidad: '', precioTotal: '', canalVenta: 'Instagram', metodoPago: 'Yape', comprobante: 'Boleta', documentoCliente: ''
   });
+
+  // --- ESTADO PARA EDICIÓN ---
+  const [editingItem, setEditingItem] = useState(null);
 
   // --- 1. AUTENTICACIÓN FIREBASE (Fondo) ---
   useEffect(() => {
@@ -168,10 +175,11 @@ export default function App() {
     e.preventDefault();
     if (!firebaseUser || !db || userRole !== 'admin') return;
 
-    const cFob = Number(formIngreso.costoFob);
-    const cFlete = Number(formIngreso.flete);
-    const cAduanas = Number(formIngreso.aduanas);
-    const qty = Number(formIngreso.cantidad);
+    // Si el usuario lo deja en blanco, lo tratamos como 0
+    const cFob = Number(formIngreso.costoFob || 0);
+    const cFlete = Number(formIngreso.flete || 0);
+    const cAduanas = Number(formIngreso.aduanas || 0);
+    const qty = Number(formIngreso.cantidad || 1);
     
     const costoTotalLote = cFob + cFlete + cAduanas;
     const costoUnitarioReal = costoTotalLote / qty;
@@ -208,6 +216,44 @@ export default function App() {
       setTimeout(() => setNotification(''), 3000);
     } catch (error) {
       setNotification('❌ Error al registrar venta');
+    }
+  };
+
+  // --- ACCIONES DE EDICIÓN Y ELIMINACIÓN ---
+  const handleDelete = async (coleccion, id) => {
+    if (!window.confirm('¿Estás seguro de eliminar este registro? El stock se recalculará automáticamente.')) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, coleccion, id));
+      setNotification('✅ Registro eliminado');
+      setTimeout(() => setNotification(''), 3000);
+    } catch (error) {
+      setNotification('❌ Error al eliminar');
+    }
+  };
+
+  const handleUpdateItem = async (e) => {
+    e.preventDefault();
+    if (!firebaseUser || !db || !editingItem) return;
+
+    let updatedData = { ...editingItem.data };
+    
+    // Si se edita un ingreso, reculculamos su impacto monetario
+    if (editingItem.type === 'ingresos') {
+      const cFob = Number(updatedData.costoFob || 0);
+      const cFlete = Number(updatedData.flete || 0);
+      const cAduanas = Number(updatedData.aduanas || 0);
+      const qty = Number(updatedData.cantidad || 1);
+      updatedData.costoTotalLote = cFob + cFlete + cAduanas;
+      updatedData.costoUnitarioReal = updatedData.costoTotalLote / qty;
+    }
+
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, editingItem.type, editingItem.id), updatedData);
+      setNotification('✅ Registro actualizado con éxito');
+      setEditingItem(null);
+      setTimeout(() => setNotification(''), 3000);
+    } catch (error) {
+      setNotification('❌ Error al actualizar');
     }
   };
 
@@ -482,22 +528,22 @@ export default function App() {
                   <div className="space-y-4 bg-gray-50 p-4 rounded-lg border">
                     <h3 className="font-bold flex items-center gap-2 text-gray-700"><Calculator className="w-4 h-4"/> Costos (S/)</h3>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Costo FOB Total</label>
-                      <input required type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Costo FOB Total (Opcional)</label>
+                      <input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full border p-2 rounded outline-none" />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Flete Internacional</label>
-                        <input required type="number" step="0.01" value={formIngreso.flete} onChange={e => setFormIngreso({...formIngreso, flete: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Flete Internacional (Opcional)</label>
+                        <input type="number" step="0.01" value={formIngreso.flete} onChange={e => setFormIngreso({...formIngreso, flete: e.target.value})} className="w-full border p-2 rounded outline-none" />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Aduanas</label>
-                        <input required type="number" step="0.01" value={formIngreso.aduanas} onChange={e => setFormIngreso({...formIngreso, aduanas: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Aduanas (Opcional)</label>
+                        <input type="number" step="0.01" value={formIngreso.aduanas} onChange={e => setFormIngreso({...formIngreso, aduanas: e.target.value})} className="w-full border p-2 rounded outline-none" />
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">IGV Pagado</label>
-                      <input required type="number" step="0.01" value={formIngreso.igv} onChange={e => setFormIngreso({...formIngreso, igv: e.target.value})} className="w-full border p-2 rounded outline-none bg-white" />
+                      <label className="block text-xs font-medium text-gray-600 mb-1">IGV Pagado (Opcional)</label>
+                      <input type="number" step="0.01" value={formIngreso.igv} onChange={e => setFormIngreso({...formIngreso, igv: e.target.value})} className="w-full border p-2 rounded outline-none bg-white" />
                     </div>
                   </div>
                   <div className="md:col-span-2 flex justify-end mt-4">
@@ -526,17 +572,14 @@ export default function App() {
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
-                        <input required type="number" min="1" value={formSalida.cantidad} onChange={e => setFormSalida({...formSalida, cantidad: e.target.value})} className="w-full border p-2 rounded outline-none" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Precio Total</label>
-                        <input required type="number" step="0.01" value={formSalida.precioTotal} onChange={e => setFormSalida({...formSalida, precioTotal: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Precio Total (Opcional)</label>
+                        <input type="number" step="0.01" value={formSalida.precioTotal} onChange={e => setFormSalida({...formSalida, precioTotal: e.target.value})} className="w-full border p-2 rounded outline-none" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Canal de Venta</label>
                       <select value={formSalida.canalVenta} onChange={e => setFormSalida({...formSalida, canalVenta: e.target.value})} className="w-full border p-2 rounded outline-none">
+                        <option value="">Sin especificar</option>
                         <option>Instagram</option>
                         <option>WhatsApp</option>
                         <option>Feria K-Pop</option>
@@ -549,6 +592,7 @@ export default function App() {
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Método de Pago</label>
                       <select value={formSalida.metodoPago} onChange={e => setFormSalida({...formSalida, metodoPago: e.target.value})} className="w-full border p-2 rounded outline-none">
+                        <option value="">Sin especificar</option>
                         <option>Yape / Plin</option>
                         <option>Transferencia BCP</option>
                         <option>Efectivo</option>
@@ -558,6 +602,7 @@ export default function App() {
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">Comprobante</label>
                         <select value={formSalida.comprobante} onChange={e => setFormSalida({...formSalida, comprobante: e.target.value})} className="w-full border p-2 rounded outline-none">
+                          <option value="">Sin especificar</option>
                           <option>Boleta</option>
                           <option>Factura</option>
                           <option>Nota de Venta</option>
@@ -565,7 +610,7 @@ export default function App() {
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-600 mb-1">DNI / RUC</label>
-                        <input type="text" value={formSalida.documentoCliente} onChange={e => setFormSalida({...formSalida, documentoCliente: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                        <input type="text" value={formSalida.documentoCliente} onChange={e => setFormSalida({...formSalida, documentoCliente: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Opcional" />
                       </div>
                     </div>
                   </div>
@@ -580,30 +625,72 @@ export default function App() {
             {activeTab === 'reporte' && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-                  <BarChart3 className="text-purple-600" /> Historial Rápido
+                  <BarChart3 className="text-purple-600" /> Historial de Registros
                 </h2>
-                <p className="text-sm text-gray-500 mb-4">Aquí puedes ver los últimos registros que ingresaste en la base de datos.</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <p className="text-sm text-gray-500 mb-6">Administra tus últimos registros. Puedes editarlos o eliminarlos en caso de error.</p>
+                
+                <div className="space-y-8">
+                  {/* TABLA VENTAS */}
                   <div>
-                    <h3 className="font-bold text-sm text-gray-500 uppercase mb-3">Últimas Ventas</h3>
-                    <div className="border rounded-lg overflow-hidden">
-                      <table className="min-w-full text-xs text-left bg-gray-50">
+                    <h3 className="font-bold text-sm text-gray-500 uppercase mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-green-500"/> Ventas y Salidas</h3>
+                    <div className="border rounded-lg overflow-x-auto">
+                      <table className="min-w-full text-xs text-left bg-white">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="p-3">Fecha</th>
+                            <th className="p-3">SKU</th>
+                            <th className="p-3">Cant</th>
+                            <th className="p-3">Total (S/)</th>
+                            <th className="p-3 text-right">Acciones</th>
+                          </tr>
+                        </thead>
                         <tbody>
-                          {salidas.slice(0,5).map(s => (
-                            <tr key={s.id} className="border-b"><td className="p-2">{s.sku}</td><td className="p-2 text-green-600 font-bold">S/ {s.precioTotal}</td></tr>
+                          {salidas.map(s => (
+                            <tr key={s.id} className="border-b hover:bg-gray-50">
+                              <td className="p-3 text-gray-500">{s.createdAt?.toDate().toLocaleDateString() || 'Nuevo'}</td>
+                              <td className="p-3 font-medium">{s.sku}</td>
+                              <td className="p-3">{s.cantidad}</td>
+                              <td className="p-3 text-green-600 font-bold">{s.precioTotal || '0'}</td>
+                              <td className="p-3 flex justify-end gap-2">
+                                <button onClick={() => setEditingItem({ type: 'salidas', id: s.id, data: s })} className="text-blue-500 hover:bg-blue-100 p-1 rounded transition-colors" title="Editar"><Edit2 className="w-4 h-4"/></button>
+                                <button onClick={() => handleDelete('salidas', s.id)} className="text-red-500 hover:bg-red-100 p-1 rounded transition-colors" title="Eliminar"><Trash2 className="w-4 h-4"/></button>
+                              </td>
+                            </tr>
                           ))}
+                          {salidas.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-gray-400">No hay ventas registradas</td></tr>}
                         </tbody>
                       </table>
                     </div>
                   </div>
+
+                  {/* TABLA INGRESOS */}
                   <div>
-                    <h3 className="font-bold text-sm text-gray-500 uppercase mb-3">Últimos Lotes</h3>
-                    <div className="border rounded-lg overflow-hidden">
-                      <table className="min-w-full text-xs text-left bg-gray-50">
+                    <h3 className="font-bold text-sm text-gray-500 uppercase mb-3 flex items-center gap-2"><TrendingDown className="w-4 h-4 text-blue-500"/> Ingresos de Lotes</h3>
+                    <div className="border rounded-lg overflow-x-auto">
+                      <table className="min-w-full text-xs text-left bg-white">
+                        <thead className="bg-gray-50 border-b">
+                          <tr>
+                            <th className="p-3">Lote ID</th>
+                            <th className="p-3">SKU</th>
+                            <th className="p-3">Cant</th>
+                            <th className="p-3">Costo Total</th>
+                            <th className="p-3 text-right">Acciones</th>
+                          </tr>
+                        </thead>
                         <tbody>
-                          {ingresos.slice(0,5).map(i => (
-                            <tr key={i.id} className="border-b"><td className="p-2 font-mono">{i.loteId}</td><td className="p-2">{i.sku}</td></tr>
+                          {ingresos.map(i => (
+                            <tr key={i.id} className="border-b hover:bg-gray-50">
+                              <td className="p-3 font-mono text-gray-600">{i.loteId || 'S/N'}</td>
+                              <td className="p-3 font-medium">{i.sku}</td>
+                              <td className="p-3">{i.cantidad}</td>
+                              <td className="p-3 text-gray-600">S/ {i.costoTotalLote?.toFixed(2) || '0.00'}</td>
+                              <td className="p-3 flex justify-end gap-2">
+                                <button onClick={() => setEditingItem({ type: 'ingresos', id: i.id, data: i })} className="text-blue-500 hover:bg-blue-100 p-1 rounded transition-colors" title="Editar"><Edit2 className="w-4 h-4"/></button>
+                                <button onClick={() => handleDelete('ingresos', i.id)} className="text-red-500 hover:bg-red-100 p-1 rounded transition-colors" title="Eliminar"><Trash2 className="w-4 h-4"/></button>
+                              </td>
+                            </tr>
                           ))}
+                          {ingresos.length === 0 && <tr><td colSpan="5" className="p-4 text-center text-gray-400">No hay ingresos registrados</td></tr>}
                         </tbody>
                       </table>
                     </div>
@@ -614,6 +701,71 @@ export default function App() {
 
           </div>
         )}
+
+        {/* --- MODAL DE EDICIÓN --- */}
+        {editingItem && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 relative max-h-[90vh] overflow-y-auto">
+              <button onClick={() => setEditingItem(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-800">
+                <X className="w-6 h-6" />
+              </button>
+              <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
+                <Edit2 className="w-5 h-5 text-indigo-600" /> Editar {editingItem.type === 'ingresos' ? 'Ingreso' : 'Venta'}
+              </h2>
+              
+              <form onSubmit={handleUpdateItem} className="space-y-4">
+                
+                {/* CAMPOS COMUNES */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad</label>
+                    <input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" />
+                  </div>
+                  {editingItem.type === 'salidas' && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Precio Total (S/)</label>
+                      <input type="number" step="0.01" value={editingItem.data.precioTotal} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                  )}
+                  {editingItem.type === 'ingresos' && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">ID de Lote</label>
+                      <input value={editingItem.data.loteId} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, loteId: e.target.value } })} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" />
+                    </div>
+                  )}
+                </div>
+
+                {/* CAMPOS ESPECÍFICOS DE INGRESO */}
+                {editingItem.type === 'ingresos' && (
+                  <div className="bg-gray-50 p-4 rounded-lg border grid grid-cols-2 gap-4 mt-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Costo FOB</label>
+                      <input type="number" step="0.01" value={editingItem.data.costoFob || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, costoFob: e.target.value } })} className="w-full border p-2 rounded outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Flete</label>
+                      <input type="number" step="0.01" value={editingItem.data.flete || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, flete: e.target.value } })} className="w-full border p-2 rounded outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Aduanas</label>
+                      <input type="number" step="0.01" value={editingItem.data.aduanas || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, aduanas: e.target.value } })} className="w-full border p-2 rounded outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">IGV</label>
+                      <input type="number" step="0.01" value={editingItem.data.igv || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, igv: e.target.value } })} className="w-full border p-2 rounded outline-none" />
+                    </div>
+                  </div>
+                )}
+                
+                <div className="flex justify-end pt-4 border-t mt-4">
+                  <button type="button" onClick={() => setEditingItem(null)} className="mr-3 px-4 py-2 text-gray-500 hover:text-gray-800 transition-colors">Cancelar</button>
+                  <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">Guardar Cambios</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   );
