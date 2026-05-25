@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -24,14 +24,6 @@ try {
   console.error("Error inicializando Firebase", error);
 }
 
-// Catálogo base de ejemplo
-const MAESTRO_PRODUCTOS = [
-  { sku: 'ALB-BTS-01', nombre: 'Album Proof (Standard Ed.)', categoria: 'Álbumes', marca: 'BTS' },
-  { sku: 'LS-BTS-01', nombre: 'Official Lightstick MotS', categoria: 'Lightsticks', marca: 'BTS' },
-  { sku: 'PH-ENH-01', nombre: 'Photocard Romance: Untold', categoria: 'Photocards', marca: 'Enhypen' },
-  { sku: 'TEC-APP-01', nombre: 'iPhone 15 Pro Max 256GB', categoria: 'Tecnología', marca: 'Apple' },
-];
-
 export default function App() {
   const [firebaseUser, setFirebaseUser] = useState(null);
   
@@ -43,10 +35,12 @@ export default function App() {
   const [isKoreaView, setIsKoreaView] = useState(false);
   const [exportCategory, setExportCategory] = useState('Todas');
   
+  const [productos, setProductos] = useState([]);
   const [ingresos, setIngresos] = useState([]);
   const [salidas, setSalidas] = useState([]);
   const [notification, setNotification] = useState('');
 
+  const [formProducto, setFormProducto] = useState({ sku: '', nombre: '', categoria: '', marca: '' });
   const [formIngreso, setFormIngreso] = useState({
     loteId: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: ''
   });
@@ -76,6 +70,12 @@ export default function App() {
   useEffect(() => {
     if (!firebaseUser || !db) return;
 
+    const productosRef = collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'productos');
+    const unsubProductos = onSnapshot(productosRef, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setProductos(data);
+    }, (error) => console.error(error));
+
     const ingresosRef = collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'ingresos');
     const unsubIngresos = onSnapshot(ingresosRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -89,6 +89,7 @@ export default function App() {
     }, (error) => console.error(error));
 
     return () => {
+      unsubProductos();
       unsubIngresos();
       unsubSalidas();
     };
@@ -98,7 +99,7 @@ export default function App() {
   const stockCalculado = useMemo(() => {
     const stockMap = {};
     
-    MAESTRO_PRODUCTOS.forEach(prod => {
+    productos.forEach(prod => {
       stockMap[prod.sku] = { ...prod, totalIngresos: 0, totalSalidas: 0, stockActual: 0, costoPromedio: 0, valorTotal: 0 };
     });
 
@@ -124,7 +125,13 @@ export default function App() {
     }
 
     return finalStock;
-  }, [ingresos, salidas, userRole]);
+  }, [ingresos, salidas, userRole, productos]);
+
+  // Lista de categorías únicas para el filtro de exportación dinámico
+  const categoriasUnicas = useMemo(() => {
+    const cats = new Set(productos.map(p => p.categoria));
+    return Array.from(cats);
+  }, [productos]);
 
   // --- 4. EXPORTAR A CSV ---
   const handleExportCSV = () => {
@@ -171,6 +178,30 @@ export default function App() {
   };
 
   // --- ACCIONES DE GUARDADO (Solo Admin) ---
+  const handleGuardarProducto = async (e) => {
+    e.preventDefault();
+    if (!firebaseUser || !db || userRole !== 'admin') return;
+
+    if (productos.some(p => p.sku.toUpperCase() === formProducto.sku.toUpperCase())) {
+      setNotification('❌ El SKU ya existe en el catálogo');
+      setTimeout(() => setNotification(''), 3000);
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'productos'), {
+        ...formProducto,
+        sku: formProducto.sku.toUpperCase(),
+        createdAt: serverTimestamp()
+      });
+      setNotification('✅ Producto añadido al catálogo');
+      setFormProducto({ sku: '', nombre: '', categoria: '', marca: '' });
+      setTimeout(() => setNotification(''), 3000);
+    } catch (error) {
+      setNotification('❌ Error al guardar producto');
+    }
+  };
+
   const handleGuardarIngreso = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db || userRole !== 'admin') return;
@@ -374,6 +405,9 @@ export default function App() {
             <button onClick={() => setActiveTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors ${activeTab === 'stock' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800'}`}>
               <Package className="w-5 h-5" /> Stock & Maestro
             </button>
+            <button onClick={() => setActiveTab('catalogo')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors ${activeTab === 'catalogo' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800'}`}>
+              <Tags className="w-5 h-5" /> Catálogo de Prod.
+            </button>
             <button onClick={() => setActiveTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800'}`}>
               <TrendingDown className="w-5 h-5" /> Registrar Ingreso
             </button>
@@ -445,14 +479,14 @@ export default function App() {
                   <div className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg border">
                     <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Exportar:</span>
                     <select 
-                      className="text-sm border-none bg-transparent outline-none font-medium text-gray-700 cursor-pointer"
+                      className="text-sm border-none bg-transparent outline-none font-medium text-gray-700 cursor-pointer max-w-[150px]"
                       value={exportCategory}
                       onChange={(e) => setExportCategory(e.target.value)}
                     >
                       <option value="Todas">Todo el Inventario</option>
-                      <option value="Álbumes">Solo Álbumes</option>
-                      <option value="Tecnología">Solo Tecnología</option>
-                      <option value="Lightsticks">Solo Lightsticks</option>
+                      {categoriasUnicas.map(cat => (
+                        <option key={cat} value={cat}>Solo {cat}</option>
+                      ))}
                     </select>
                     <button 
                       onClick={handleExportCSV}
@@ -497,6 +531,70 @@ export default function App() {
               </div>
             )}
 
+            {/* VISTA CATÁLOGO DE PRODUCTOS */}
+            {activeTab === 'catalogo' && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div className="mb-6 pb-4 border-b">
+                  <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                    <Tags className="text-indigo-600" /> Catálogo Maestro de Productos
+                  </h2>
+                  <p className="text-sm text-gray-500 mt-1">Añade o elimina productos. Solo los productos aquí registrados aparecerán en tus formularios de ingreso y salida.</p>
+                </div>
+                
+                <form onSubmit={handleGuardarProducto} className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 bg-gray-50 p-4 rounded-lg border">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">SKU (Código único)</label>
+                    <input required value={formProducto.sku} onChange={e => setFormProducto({...formProducto, sku: e.target.value})} className="w-full border p-2 rounded outline-none uppercase" placeholder="Ej: ALB-BTS-02" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Nombre del Producto</label>
+                    <input required value={formProducto.nombre} onChange={e => setFormProducto({...formProducto, nombre: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: Album Map of The Soul" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Categoría</label>
+                    <input required value={formProducto.categoria} onChange={e => setFormProducto({...formProducto, categoria: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: Álbumes, Ropa, K-Beauty..." />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Marca / Grupo</label>
+                    <input required value={formProducto.marca} onChange={e => setFormProducto({...formProducto, marca: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: BTS, Apple, Etude..." />
+                  </div>
+                  <div className="md:col-span-4 flex justify-end mt-2">
+                    <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">Añadir al Catálogo</button>
+                  </div>
+                </form>
+
+                <div className="border rounded-lg overflow-x-auto">
+                  <table className="min-w-full text-sm text-left bg-white">
+                    <thead className="bg-gray-50 border-b">
+                      <tr>
+                        <th className="p-3">SKU</th>
+                        <th className="p-3">Producto</th>
+                        <th className="p-3">Categoría</th>
+                        <th className="p-3">Marca</th>
+                        <th className="p-3 text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {productos.map(p => (
+                        <tr key={p.id} className="border-b hover:bg-gray-50">
+                          <td className="p-3 font-mono font-medium text-indigo-600">{p.sku}</td>
+                          <td className="p-3 font-medium">{p.nombre}</td>
+                          <td className="p-3">
+                            <span className="px-2 py-1 bg-gray-200 rounded-full text-xs font-medium">{p.categoria}</span>
+                          </td>
+                          <td className="p-3 text-gray-500">{p.marca}</td>
+                          <td className="p-3 flex justify-end">
+                            <button onClick={() => handleDelete('productos', p.id)} className="text-red-500 hover:bg-red-100 p-2 rounded transition-colors" title="Eliminar del catálogo"><Trash2 className="w-4 h-4"/></button>
+                          </td>
+                        </tr>
+                      ))}
+                      {productos.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-400">El catálogo está vacío. Añade tu primer producto en el formulario de arriba.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* VISTA REGISTRO DE INGRESO */}
             {activeTab === 'ingreso' && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -516,7 +614,7 @@ export default function App() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Producto (SKU)</label>
                       <select required value={formIngreso.sku} onChange={e => setFormIngreso({...formIngreso, sku: e.target.value})} className="w-full border p-2 rounded outline-none">
                         <option value="">Selecciona...</option>
-                        {MAESTRO_PRODUCTOS.map(p => <option key={p.sku} value={p.sku}>{p.sku} - {p.nombre}</option>)}
+                        {productos.map(p => <option key={p.id} value={p.sku}>{p.sku} - {p.nombre}</option>)}
                       </select>
                     </div>
                     <div>
