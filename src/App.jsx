@@ -7,7 +7,6 @@ import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calc
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
 try {
-  // Asegúrate de reemplazar esto con tus llaves reales de Firebase si aún no lo has hecho en Vercel
   const firebaseConfig = {
   apiKey: "AIzaSyBbBGbZqAtm5BJi0FiGavraGhNE04-yf2E",
   authDomain: "casa-seoul-inventario.firebaseapp.com",
@@ -45,10 +44,9 @@ export default function App() {
     loteId: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: ''
   });
   const [formSalida, setFormSalida] = useState({
-    sku: '', cantidad: '', precioTotal: '', canalVenta: 'Instagram', metodoPago: 'Yape', comprobante: 'Boleta', documentoCliente: ''
+    sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: ''
   });
 
-  // --- ESTADO PARA EDICIÓN ---
   const [editingItem, setEditingItem] = useState(null);
 
   // --- 1. AUTENTICACIÓN FIREBASE (Fondo) ---
@@ -79,12 +77,15 @@ export default function App() {
     const ingresosRef = collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'ingresos');
     const unsubIngresos = onSnapshot(ingresosRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Ordenar descendente
+      data.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
       setIngresos(data);
     }, (error) => console.error(error));
 
     const salidasRef = collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'salidas');
     const unsubSalidas = onSnapshot(salidasRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      data.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
       setSalidas(data);
     }, (error) => console.error(error));
 
@@ -104,7 +105,7 @@ export default function App() {
     });
 
     ingresos.forEach(ing => {
-      if (!stockMap[ing.sku]) stockMap[ing.sku] = { sku: ing.sku, nombre: 'Producto Desconocido', totalIngresos: 0, totalSalidas: 0, stockActual: 0, valorTotal: 0, categoria: 'Otros' };
+      if (!stockMap[ing.sku]) stockMap[ing.sku] = { sku: ing.sku, nombre: 'Producto Eliminado', totalIngresos: 0, totalSalidas: 0, stockActual: 0, valorTotal: 0, categoria: 'Otros', marca: '-' };
       stockMap[ing.sku].totalIngresos += Number(ing.cantidad);
       stockMap[ing.sku].valorTotal += (Number(ing.costoUnitarioReal) * Number(ing.cantidad));
     });
@@ -127,7 +128,6 @@ export default function App() {
     return finalStock;
   }, [ingresos, salidas, userRole, productos]);
 
-  // Lista de categorías únicas para el filtro de exportación dinámico
   const categoriasUnicas = useMemo(() => {
     const cats = new Set(productos.map(p => p.categoria));
     return Array.from(cats);
@@ -165,12 +165,12 @@ export default function App() {
     e.preventDefault();
     const { username, password } = loginForm;
     
-    if (username === 'admin' && password === '@dmin135') {
+    if (username === 'admin' && password === 'admin123') {
       setUserRole('admin');
       setActiveTab('stock');
     } else if (username === 'invitado' && password === 'invitado123') {
       setUserRole('invitado');
-      setIsKoreaView(true); // El invitado solo ve la vista de stock general
+      setIsKoreaView(true);
     } else {
       setNotification('❌ Credenciales incorrectas');
       setTimeout(() => setNotification(''), 3000);
@@ -180,9 +180,20 @@ export default function App() {
   // --- ACCIONES DE GUARDADO (Solo Admin) ---
   const handleGuardarProducto = async (e) => {
     e.preventDefault();
-    if (!firebaseUser || !db || userRole !== 'admin') return;
+    
+    if (!firebaseUser || !db) {
+      setNotification('⏳ Conectando a la base de datos... intenta de nuevo.');
+      setTimeout(() => setNotification(''), 3000);
+      return;
+    }
+    
+    if (userRole !== 'admin') return;
 
-    if (productos.some(p => p.sku.toUpperCase() === formProducto.sku.toUpperCase())) {
+    const skuIngresado = formProducto.sku?.trim().toUpperCase();
+    
+    const existeSKU = productos.some(p => p && p.sku && p.sku.toUpperCase() === skuIngresado);
+
+    if (existeSKU) {
       setNotification('❌ El SKU ya existe en el catálogo');
       setTimeout(() => setNotification(''), 3000);
       return;
@@ -191,14 +202,16 @@ export default function App() {
     try {
       await addDoc(collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'productos'), {
         ...formProducto,
-        sku: formProducto.sku.toUpperCase(),
+        sku: skuIngresado,
         createdAt: serverTimestamp()
       });
       setNotification('✅ Producto añadido al catálogo');
       setFormProducto({ sku: '', nombre: '', categoria: '', marca: '' });
       setTimeout(() => setNotification(''), 3000);
     } catch (error) {
+      console.error("Error al guardar producto:", error);
       setNotification('❌ Error al guardar producto');
+      setTimeout(() => setNotification(''), 3000);
     }
   };
 
@@ -206,7 +219,6 @@ export default function App() {
     e.preventDefault();
     if (!firebaseUser || !db || userRole !== 'admin') return;
 
-    // Si el usuario lo deja en blanco, lo tratamos como 0
     const cFob = Number(formIngreso.costoFob || 0);
     const cFlete = Number(formIngreso.flete || 0);
     const cAduanas = Number(formIngreso.aduanas || 0);
@@ -233,7 +245,7 @@ export default function App() {
 
     const itemStock = stockCalculado.find(s => s.sku === formSalida.sku);
     if (!itemStock || itemStock.stockActual < Number(formSalida.cantidad)) {
-      setNotification('❌ No hay stock suficiente');
+      setNotification('❌ No hay stock suficiente para esta venta');
       setTimeout(() => setNotification(''), 3000);
       return;
     }
@@ -243,14 +255,13 @@ export default function App() {
         ...formSalida, createdAt: serverTimestamp()
       });
       setNotification('✅ Venta registrada con éxito');
-      setFormSalida({ sku: '', cantidad: '', precioTotal: '', canalVenta: 'Instagram', metodoPago: 'Yape', comprobante: 'Boleta', documentoCliente: '' });
+      setFormSalida({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' });
       setTimeout(() => setNotification(''), 3000);
     } catch (error) {
       setNotification('❌ Error al registrar venta');
     }
   };
 
-  // --- ACCIONES DE EDICIÓN Y ELIMINACIÓN ---
   const handleDelete = async (coleccion, id) => {
     if (!window.confirm('¿Estás seguro de eliminar este registro? El stock se recalculará automáticamente.')) return;
     try {
@@ -268,7 +279,6 @@ export default function App() {
 
     let updatedData = { ...editingItem.data };
     
-    // Si se edita un ingreso, reculculamos su impacto monetario
     if (editingItem.type === 'ingresos') {
       const cFob = Number(updatedData.costoFob || 0);
       const cFlete = Number(updatedData.flete || 0);
@@ -289,7 +299,7 @@ export default function App() {
   };
 
   // ==========================================
-  // PANTALLA DE LOGIN (Sin pistas, segura)
+  // PANTALLA DE LOGIN
   // ==========================================
   if (!userRole) {
     return (
@@ -379,6 +389,9 @@ export default function App() {
                 </td>
               </tr>
             ))}
+            {stockCalculado.length === 0 && (
+              <tr><td colSpan="5" className="p-4 text-center text-gray-500">No records found.</td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -415,7 +428,7 @@ export default function App() {
               <TrendingUp className="w-5 h-5" /> Registrar Venta
             </button>
             <button onClick={() => setActiveTab('reporte')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-colors ${activeTab === 'reporte' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800'}`}>
-              <BarChart3 className="w-5 h-5" /> Reportes & SUNAT
+              <BarChart3 className="w-5 h-5" /> Historial / Edición
             </button>
           </nav>
           
@@ -430,27 +443,24 @@ export default function App() {
       {/* CONTENIDO PRINCIPAL */}
       <main className="flex-1 p-8 overflow-auto relative">
         
-        {/* Header Superior Derecho (Controles) */}
-        <div className="absolute top-6 right-8 flex items-center gap-6">
-          
-          {/* Botón de Logout para Invitados */}
+        {/* Header Superior Derecho */}
+        <div className="absolute top-6 right-8 flex items-center gap-6 z-10">
           {userRole === 'invitado' && (
-             <button onClick={() => { setUserRole(null); setLoginForm({username: '', password: ''}) }} className="text-sm font-medium text-red-600 flex items-center gap-2 hover:underline">
+             <button onClick={() => { setUserRole(null); setLoginForm({username: '', password: ''}) }} className="text-sm font-medium text-red-600 flex items-center gap-2 hover:underline bg-white px-3 py-1 rounded shadow">
                <LogOut className="w-4 h-4" /> Salir
              </button>
           )}
 
-          {/* Toggle Vista Corea (Solo Admin) */}
           {userRole === 'admin' && (
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-medium text-gray-500">
-                {isKoreaView ? 'Regresar a Admin' : 'Simular Vista Socios Corea'}
+            <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg shadow-sm border border-gray-200">
+              <span className="text-sm font-medium text-gray-600">
+                {isKoreaView ? 'Regresar a Admin' : 'Vista Socios Corea'}
               </span>
               <button 
                 onClick={() => setIsKoreaView(!isKoreaView)}
-                className={`w-14 h-7 rounded-full flex items-center transition-colors p-1 ${isKoreaView ? 'bg-blue-600' : 'bg-gray-300'}`}
+                className={`w-12 h-6 rounded-full flex items-center transition-colors p-1 ${isKoreaView ? 'bg-indigo-600' : 'bg-gray-300'}`}
               >
-                <div className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform ${isKoreaView ? 'translate-x-7' : ''}`}></div>
+                <div className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform ${isKoreaView ? 'translate-x-6' : ''}`}></div>
               </button>
             </div>
           )}
@@ -525,6 +535,9 @@ export default function App() {
                           <td className="p-3 text-right text-gray-600 font-medium">S/ {item.costoPromedio.toFixed(2)}</td>
                         </tr>
                       ))}
+                      {stockCalculado.length === 0 && (
+                        <tr><td colSpan="6" className="p-8 text-center text-gray-400">El inventario está vacío. Empieza añadiendo productos en el Catálogo.</td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -552,7 +565,7 @@ export default function App() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Categoría</label>
-                    <input required value={formProducto.categoria} onChange={e => setFormProducto({...formProducto, categoria: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: Álbumes, Ropa, K-Beauty..." />
+                    <input required value={formProducto.categoria} onChange={e => setFormProducto({...formProducto, categoria: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: Álbumes, Ropa, Tecnología..." />
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Marca / Grupo</label>
@@ -604,16 +617,15 @@ export default function App() {
                   </h2>
                 </div>
                 <form onSubmit={handleGuardarIngreso} className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Controles de Ingreso... idénticos al código anterior */}
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">ID de Lote (Tracking)</label>
-                      <input required value={formIngreso.loteId} onChange={e => setFormIngreso({...formIngreso, loteId: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                      <label className="block text-sm font-medium text-gray-700 mb-1">ID de Lote / Importación</label>
+                      <input value={formIngreso.loteId} onChange={e => setFormIngreso({...formIngreso, loteId: e.target.value})} className="w-full border p-2 rounded outline-none uppercase" placeholder="Ej: STOCK-INICIAL" />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Producto (SKU)</label>
                       <select required value={formIngreso.sku} onChange={e => setFormIngreso({...formIngreso, sku: e.target.value})} className="w-full border p-2 rounded outline-none">
-                        <option value="">Selecciona...</option>
+                        <option value="">Selecciona del catálogo...</option>
                         {productos.map(p => <option key={p.id} value={p.sku}>{p.sku} - {p.nombre}</option>)}
                       </select>
                     </div>
@@ -624,28 +636,28 @@ export default function App() {
                   </div>
 
                   <div className="space-y-4 bg-gray-50 p-4 rounded-lg border">
-                    <h3 className="font-bold flex items-center gap-2 text-gray-700"><Calculator className="w-4 h-4"/> Costos (S/)</h3>
+                    <h3 className="font-bold flex items-center gap-2 text-gray-700"><Calculator className="w-4 h-4"/> Costos (S/) <span className="text-xs font-normal text-gray-500">- Opcional</span></h3>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Costo FOB Total (Opcional)</label>
-                      <input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Costo FOB Total</label>
+                      <input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="0.00" />
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Flete Internacional (Opcional)</label>
-                        <input type="number" step="0.01" value={formIngreso.flete} onChange={e => setFormIngreso({...formIngreso, flete: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Flete Internacional</label>
+                        <input type="number" step="0.01" value={formIngreso.flete} onChange={e => setFormIngreso({...formIngreso, flete: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="0.00" />
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-600 mb-1">Aduanas (Opcional)</label>
-                        <input type="number" step="0.01" value={formIngreso.aduanas} onChange={e => setFormIngreso({...formIngreso, aduanas: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Aduanas</label>
+                        <input type="number" step="0.01" value={formIngreso.aduanas} onChange={e => setFormIngreso({...formIngreso, aduanas: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="0.00" />
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">IGV Pagado (Opcional)</label>
-                      <input type="number" step="0.01" value={formIngreso.igv} onChange={e => setFormIngreso({...formIngreso, igv: e.target.value})} className="w-full border p-2 rounded outline-none bg-white" />
+                      <label className="block text-xs font-medium text-gray-600 mb-1">IGV Pagado</label>
+                      <input type="number" step="0.01" value={formIngreso.igv} onChange={e => setFormIngreso({...formIngreso, igv: e.target.value})} className="w-full border p-2 rounded outline-none bg-white" placeholder="0.00" />
                     </div>
                   </div>
                   <div className="md:col-span-2 flex justify-end mt-4">
-                    <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold">Guardar Lote</button>
+                    <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">Guardar Lote de Ingreso</button>
                   </div>
                 </form>
               </div>
@@ -664,14 +676,18 @@ export default function App() {
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Producto Vendido</label>
                       <select required value={formSalida.sku} onChange={e => setFormSalida({...formSalida, sku: e.target.value})} className="w-full border p-2 rounded outline-none">
-                        <option value="">Selecciona...</option>
+                        <option value="">Selecciona del stock disponible...</option>
                         {stockCalculado.map(p => <option key={p.sku} value={p.sku} disabled={p.stockActual <= 0}>{p.sku} - {p.nombre} (Stock: {p.stockActual})</option>)}
                       </select>
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Cantidad</label>
+                        <input required type="number" min="1" value={formSalida.cantidad} onChange={e => setFormSalida({...formSalida, cantidad: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                      </div>
+                      <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Precio Total (Opcional)</label>
-                        <input type="number" step="0.01" value={formSalida.precioTotal} onChange={e => setFormSalida({...formSalida, precioTotal: e.target.value})} className="w-full border p-2 rounded outline-none" />
+                        <input type="number" step="0.01" value={formSalida.precioTotal} onChange={e => setFormSalida({...formSalida, precioTotal: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="S/ 0.00" />
                       </div>
                     </div>
                     <div>
@@ -686,7 +702,7 @@ export default function App() {
                   </div>
 
                   <div className="space-y-4 bg-gray-50 p-4 rounded-lg border">
-                    <h3 className="font-bold flex items-center gap-2 text-gray-700"><ShieldCheck className="w-4 h-4"/> Datos de Pago</h3>
+                    <h3 className="font-bold flex items-center gap-2 text-gray-700"><ShieldCheck className="w-4 h-4"/> Datos de Pago <span className="text-xs font-normal text-gray-500">- Opcional</span></h3>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Método de Pago</label>
                       <select value={formSalida.metodoPago} onChange={e => setFormSalida({...formSalida, metodoPago: e.target.value})} className="w-full border p-2 rounded outline-none">
@@ -713,19 +729,19 @@ export default function App() {
                     </div>
                   </div>
                   <div className="md:col-span-2 flex justify-end mt-4">
-                    <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-bold">Registrar Venta</button>
+                    <button type="submit" className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">Registrar Venta</button>
                   </div>
                 </form>
               </div>
             )}
 
-            {/* VISTA REPORTES */}
+            {/* VISTA REPORTES (Historial) */}
             {activeTab === 'reporte' && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
                 <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
                   <BarChart3 className="text-purple-600" /> Historial de Registros
                 </h2>
-                <p className="text-sm text-gray-500 mb-6">Administra tus últimos registros. Puedes editarlos o eliminarlos en caso de error.</p>
+                <p className="text-sm text-gray-500 mb-6">Administra tus últimos registros de stock. Puedes editarlos o eliminarlos en caso de error y el inventario se ajustará solo.</p>
                 
                 <div className="space-y-8">
                   {/* TABLA VENTAS */}
@@ -800,11 +816,11 @@ export default function App() {
           </div>
         )}
 
-        {/* --- MODAL DE EDICIÓN --- */}
+        {/* --- MODAL DE EDICIÓN FLOTANTE --- */}
         {editingItem && (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 relative max-h-[90vh] overflow-y-auto">
-              <button onClick={() => setEditingItem(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-800">
+              <button onClick={() => setEditingItem(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-800 transition-colors">
                 <X className="w-6 h-6" />
               </button>
               <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
@@ -813,7 +829,6 @@ export default function App() {
               
               <form onSubmit={handleUpdateItem} className="space-y-4">
                 
-                {/* CAMPOS COMUNES */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad</label>
@@ -822,18 +837,17 @@ export default function App() {
                   {editingItem.type === 'salidas' && (
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Precio Total (S/)</label>
-                      <input type="number" step="0.01" value={editingItem.data.precioTotal} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" />
                     </div>
                   )}
                   {editingItem.type === 'ingresos' && (
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">ID de Lote</label>
-                      <input value={editingItem.data.loteId} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, loteId: e.target.value } })} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" />
+                      <input value={editingItem.data.loteId || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, loteId: e.target.value } })} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" />
                     </div>
                   )}
                 </div>
 
-                {/* CAMPOS ESPECÍFICOS DE INGRESO */}
                 {editingItem.type === 'ingresos' && (
                   <div className="bg-gray-50 p-4 rounded-lg border grid grid-cols-2 gap-4 mt-2">
                     <div>
