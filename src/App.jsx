@@ -39,7 +39,7 @@ export default function App() {
   const [salidas, setSalidas] = useState([]);
   const [notification, setNotification] = useState('');
 
-  const [formProducto, setFormProducto] = useState({ sku: '', nombre: '', categoria: '', marca: '' });
+  const [formProducto, setFormProducto] = useState({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '' });
   const [formIngreso, setFormIngreso] = useState({
     loteId: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: ''
   });
@@ -142,6 +142,11 @@ export default function App() {
     return Array.from(cats);
   }, [productos]);
 
+  const marcasUnicas = useMemo(() => {
+    const marcas = new Set(productos.map(p => p.marca));
+    return Array.from(marcas);
+  }, [productos]);
+
   // --- 4. EXPORTAR A CSV ---
   const handleExportCSV = () => {
     let dataToExport = stockCalculado;
@@ -201,24 +206,44 @@ export default function App() {
       return;
     }
 
-    const skuIngresado = formProducto.sku?.trim().toUpperCase();
-    const existeSKU = productos.some(p => p && p.sku && p.sku.toUpperCase() === skuIngresado);
+    // Determinamos si usará una categoría/marca existente o una nueva
+    const finalCategoria = formProducto.categoriaSelect === '+ Nueva Categoría' ? formProducto.categoriaNueva.trim() : formProducto.categoriaSelect;
+    const finalMarca = formProducto.marcaSelect === '+ Nueva Marca' ? formProducto.marcaNueva.trim() : formProducto.marcaSelect;
 
-    if (existeSKU) {
-      setNotification('❌ El SKU ya existe en el catálogo');
+    if (!finalCategoria || !finalMarca || !formProducto.nombre.trim()) {
+      setNotification('❌ Por favor, completa todos los campos');
       setTimeout(() => setNotification(''), 3000);
       return;
     }
 
+    // --- LÓGICA DE AUTO-SKU INTELIGENTE ---
+    // Tomamos las primeras 3 letras de la categoría y marca, en mayúsculas (rellenamos con X si es muy corto)
+    const prefixCat = finalCategoria.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
+    const prefixMar = finalMarca.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
+    const basePrefix = `${prefixCat}-${prefixMar}`;
+
+    // Buscamos cuántos productos tienen este prefijo para generar el correlativo (ej. ALB-BTS-001)
+    const matchingProducts = productos.filter(p => p.sku && p.sku.startsWith(basePrefix));
+    let nextNumber = matchingProducts.length + 1;
+    let skuGenerado = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`;
+
+    // Validamos en la base de datos que el código generado sea 100% único
+    while (productos.some(p => p.sku === skuGenerado)) {
+      nextNumber++;
+      skuGenerado = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`;
+    }
+
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), {
-        ...formProducto,
-        sku: skuIngresado,
+        nombre: formProducto.nombre.trim(),
+        categoria: finalCategoria,
+        marca: finalMarca,
+        sku: skuGenerado,
         createdAt: serverTimestamp()
       });
-      setNotification('✅ Producto añadido al catálogo');
-      setFormProducto({ sku: '', nombre: '', categoria: '', marca: '' });
-      setTimeout(() => setNotification(''), 3000);
+      setNotification(`✅ Producto añadido. SKU autogenerado: ${skuGenerado}`);
+      setFormProducto({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '' });
+      setTimeout(() => setNotification(''), 5000);
     } catch (error) {
       setNotification('❌ Error al guardar producto');
     }
@@ -560,28 +585,43 @@ export default function App() {
                   <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                     <Tags className="text-indigo-600" /> Catálogo Maestro de Productos
                   </h2>
-                  <p className="text-sm text-gray-500 mt-1">Añade o elimina productos. Solo los productos aquí registrados aparecerán en tus formularios de ingreso y salida.</p>
+                  <p className="text-sm text-gray-500 mt-1">Añade o elimina productos. Los códigos SKU se generarán automáticamente.</p>
                 </div>
                 
-                <form onSubmit={handleGuardarProducto} className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 bg-gray-50 p-4 rounded-lg border">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">SKU (Código único)</label>
-                    <input required value={formProducto.sku} onChange={e => setFormProducto({...formProducto, sku: e.target.value})} className="w-full border p-2 rounded outline-none uppercase" placeholder="Ej: ALB-BTS-02" />
-                  </div>
+                <form onSubmit={handleGuardarProducto} className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 bg-gray-50 p-4 rounded-lg border">
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Nombre del Producto</label>
-                    <input required value={formProducto.nombre} onChange={e => setFormProducto({...formProducto, nombre: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: Album Map of The Soul" />
+                    <input required value={formProducto.nombre} onChange={e => setFormProducto({...formProducto, nombre: e.target.value})} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Ej: Album Map of The Soul" />
                   </div>
+                  
+                  {/* SELECTOR DE CATEGORÍA INTELIGENTE */}
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Categoría</label>
-                    <input required value={formProducto.categoria} onChange={e => setFormProducto({...formProducto, categoria: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: Álbumes, Ropa, Tecnología..." />
+                    <select required value={formProducto.categoriaSelect} onChange={e => setFormProducto({...formProducto, categoriaSelect: e.target.value})} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500 mb-2 bg-white">
+                      <option value="">Selecciona una categoría...</option>
+                      {categoriasUnicas.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                      <option value="+ Nueva Categoría" className="font-bold text-indigo-600">+ Añadir nueva categoría...</option>
+                    </select>
+                    {formProducto.categoriaSelect === '+ Nueva Categoría' && (
+                      <input required autoFocus value={formProducto.categoriaNueva} onChange={e => setFormProducto({...formProducto, categoriaNueva: e.target.value})} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500 bg-white" placeholder="Escribe la nueva categoría" />
+                    )}
                   </div>
+
+                  {/* SELECTOR DE MARCA INTELIGENTE */}
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">Marca / Grupo</label>
-                    <input required value={formProducto.marca} onChange={e => setFormProducto({...formProducto, marca: e.target.value})} className="w-full border p-2 rounded outline-none" placeholder="Ej: BTS, Apple, Etude..." />
+                    <select required value={formProducto.marcaSelect} onChange={e => setFormProducto({...formProducto, marcaSelect: e.target.value})} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500 mb-2 bg-white">
+                      <option value="">Selecciona una marca...</option>
+                      {marcasUnicas.map(marca => <option key={marca} value={marca}>{marca}</option>)}
+                      <option value="+ Nueva Marca" className="font-bold text-indigo-600">+ Añadir nueva marca...</option>
+                    </select>
+                    {formProducto.marcaSelect === '+ Nueva Marca' && (
+                      <input required autoFocus value={formProducto.marcaNueva} onChange={e => setFormProducto({...formProducto, marcaNueva: e.target.value})} className="w-full border p-2 rounded outline-none focus:ring-2 focus:ring-indigo-500 bg-white" placeholder="Escribe la nueva marca" />
+                    )}
                   </div>
-                  <div className="md:col-span-4 flex justify-end mt-2">
-                    <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">Añadir al Catálogo</button>
+
+                  <div className="md:col-span-3 flex justify-end mt-2 pt-2 border-t">
+                    <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-bold transition-colors">Guardar y Generar SKU</button>
                   </div>
                 </form>
 
