@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags } from 'lucide-react';
 
@@ -26,9 +26,9 @@ try {
 export default function App() {
   const [firebaseUser, setFirebaseUser] = useState(null);
   
-  // --- SISTEMA DE ROLES Y LOGIN SECRETO ---
+  // --- SISTEMA DE ROLES Y LOGIN POR CORREO ---
   const [userRole, setUserRole] = useState(null); // 'admin' | 'invitado' | null
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   
   const [activeTab, setActiveTab] = useState('stock');
   const [isKoreaView, setIsKoreaView] = useState(false);
@@ -49,40 +49,49 @@ export default function App() {
 
   const [editingItem, setEditingItem] = useState(null);
 
-  // --- 1. AUTENTICACIÓN FIREBASE (Fondo) ---
+  // --- 1. AUTENTICACIÓN FIREBASE OFICIAL ---
   useEffect(() => {
     if (!auth) return;
-    const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (error) {
-        console.error("Auth error:", error);
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      if (user) {
+        // ASIGNACIÓN DE ROLES INTELIGENTE BASADA EN EL CORREO
+        if (user.email === 'socios@casaseoul.com' || user.email?.includes('invitado')) {
+          setUserRole('invitado');
+          setIsKoreaView(true);
+        } else {
+          setUserRole('admin');
+          setActiveTab('stock');
+          setIsKoreaView(false);
+        }
+      } else {
+        setUserRole(null);
       }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setFirebaseUser);
+    });
+
     return () => unsubscribe();
   }, []);
 
-  // --- 2. OBTENER DATOS ---
+  // --- 2. OBTENER DATOS (AHORA EN CARPETA COMPARTIDA PÚBLICA) ---
   useEffect(() => {
     if (!firebaseUser || !db) return;
 
-    const productosRef = collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'productos');
+    // Usamos public/data para que todos los miembros del equipo vean la misma información
+    const productosRef = collection(db, 'artifacts', appId, 'public', 'data', 'productos');
     const unsubProductos = onSnapshot(productosRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setProductos(data);
     }, (error) => console.error(error));
 
-    const ingresosRef = collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'ingresos');
+    const ingresosRef = collection(db, 'artifacts', appId, 'public', 'data', 'ingresos');
     const unsubIngresos = onSnapshot(ingresosRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // Ordenar descendente
       data.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
       setIngresos(data);
     }, (error) => console.error(error));
 
-    const salidasRef = collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'salidas');
+    const salidasRef = collection(db, 'artifacts', appId, 'public', 'data', 'salidas');
     const unsubSalidas = onSnapshot(salidasRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       data.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
@@ -160,37 +169,39 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // --- LOGIN HANDLER ---
-  const handleLoginSubmit = (e) => {
+  // --- LOGIN HANDLER (FIREBASE REAL) ---
+  const handleLoginSubmit = async (e) => {
     e.preventDefault();
-    const { username, password } = loginForm;
-    
-    if (username === 'admin' && password === 'admin123') {
-      setUserRole('admin');
-      setActiveTab('stock');
-    } else if (username === 'invitado' && password === 'invitado123') {
-      setUserRole('invitado');
-      setIsKoreaView(true);
-    } else {
-      setNotification('❌ Credenciales incorrectas');
+    try {
+      await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password);
+      // Firebase activará onAuthStateChanged automáticamente si es exitoso
+    } catch (error) {
+      console.error(error);
+      setNotification('❌ Correo o contraseña incorrectos');
       setTimeout(() => setNotification(''), 3000);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setLoginForm({ email: '', password: '' });
+    } catch (error) {
+      console.error(error);
     }
   };
 
   // --- ACCIONES DE GUARDADO (Solo Admin) ---
   const handleGuardarProducto = async (e) => {
     e.preventDefault();
-    
-    if (!firebaseUser || !db) {
-      setNotification('⏳ Conectando a la base de datos... intenta de nuevo.');
+    if (!firebaseUser || !db) return;
+    if (userRole !== 'admin') {
+      setNotification('❌ No tienes permisos para esta acción');
       setTimeout(() => setNotification(''), 3000);
       return;
     }
-    
-    if (userRole !== 'admin') return;
 
     const skuIngresado = formProducto.sku?.trim().toUpperCase();
-    
     const existeSKU = productos.some(p => p && p.sku && p.sku.toUpperCase() === skuIngresado);
 
     if (existeSKU) {
@@ -200,7 +211,7 @@ export default function App() {
     }
 
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'productos'), {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), {
         ...formProducto,
         sku: skuIngresado,
         createdAt: serverTimestamp()
@@ -209,9 +220,7 @@ export default function App() {
       setFormProducto({ sku: '', nombre: '', categoria: '', marca: '' });
       setTimeout(() => setNotification(''), 3000);
     } catch (error) {
-      console.error("Error al guardar producto:", error);
       setNotification('❌ Error al guardar producto');
-      setTimeout(() => setNotification(''), 3000);
     }
   };
 
@@ -228,7 +237,7 @@ export default function App() {
     const costoUnitarioReal = costoTotalLote / qty;
 
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'ingresos'), {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
         ...formIngreso, costoTotalLote, costoUnitarioReal, createdAt: serverTimestamp()
       });
       setNotification('✅ Ingreso registrado con éxito');
@@ -251,7 +260,7 @@ export default function App() {
     }
 
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'users', firebaseUser.uid, 'salidas'), {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), {
         ...formSalida, createdAt: serverTimestamp()
       });
       setNotification('✅ Venta registrada con éxito');
@@ -265,7 +274,7 @@ export default function App() {
   const handleDelete = async (coleccion, id) => {
     if (!window.confirm('¿Estás seguro de eliminar este registro? El stock se recalculará automáticamente.')) return;
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, coleccion, id));
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', coleccion, id));
       setNotification('✅ Registro eliminado');
       setTimeout(() => setNotification(''), 3000);
     } catch (error) {
@@ -289,7 +298,7 @@ export default function App() {
     }
 
     try {
-      await updateDoc(doc(db, 'artifacts', appId, 'users', firebaseUser.uid, editingItem.type, editingItem.id), updatedData);
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', editingItem.type, editingItem.id), updatedData);
       setNotification('✅ Registro actualizado con éxito');
       setEditingItem(null);
       setTimeout(() => setNotification(''), 3000);
@@ -310,7 +319,7 @@ export default function App() {
               <Lock className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-3xl font-black tracking-tighter text-gray-900">CASA SEOUL</h1>
-            <p className="text-gray-500 text-sm mt-1 uppercase tracking-widest">Sistema de Gestión</p>
+            <p className="text-gray-500 text-sm mt-1 uppercase tracking-widest">Team Access</p>
           </div>
 
           {notification && (
@@ -322,12 +331,12 @@ export default function App() {
           <form onSubmit={handleLoginSubmit} className="space-y-5">
             <div>
               <input 
-                type="text" 
+                type="email" 
                 required 
-                placeholder="Usuario" 
+                placeholder="Correo Electrónico" 
                 className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-gray-900 transition-all"
-                value={loginForm.username}
-                onChange={e => setLoginForm({...loginForm, username: e.target.value})}
+                value={loginForm.email}
+                onChange={e => setLoginForm({...loginForm, email: e.target.value})}
               />
             </div>
             <div>
@@ -341,7 +350,7 @@ export default function App() {
               />
             </div>
             <button type="submit" className="w-full bg-gray-900 hover:bg-gray-800 text-white font-bold py-3 px-4 rounded-lg transition-colors">
-              Ingresar al Sistema
+              Iniciar Sesión Segura
             </button>
           </form>
         </div>
@@ -433,7 +442,7 @@ export default function App() {
           </nav>
           
           <div className="p-4 border-t border-gray-800">
-             <button onClick={() => { setUserRole(null); setLoginForm({username: '', password: ''}) }} className="w-full flex items-center justify-center gap-2 text-sm text-gray-400 hover:text-white transition-colors">
+             <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-sm text-gray-400 hover:text-white transition-colors">
                <LogOut className="w-4 h-4" /> Cerrar Sesión
              </button>
           </div>
@@ -446,7 +455,7 @@ export default function App() {
         {/* Header Superior Derecho */}
         <div className="absolute top-6 right-8 flex items-center gap-6 z-10">
           {userRole === 'invitado' && (
-             <button onClick={() => { setUserRole(null); setLoginForm({username: '', password: ''}) }} className="text-sm font-medium text-red-600 flex items-center gap-2 hover:underline bg-white px-3 py-1 rounded shadow">
+             <button onClick={handleLogout} className="text-sm font-medium text-red-600 flex items-center gap-2 hover:underline bg-white px-3 py-1 rounded shadow">
                <LogOut className="w-4 h-4" /> Salir
              </button>
           )}
