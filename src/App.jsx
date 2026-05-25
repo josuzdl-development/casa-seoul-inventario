@@ -26,10 +26,6 @@ try {
 
 // Catálogo base de ejemplo
 const MAESTRO_PRODUCTOS = [
-  { sku: 'ALB-BTS-01', nombre: 'Album Proof (Standard Ed.)', categoria: 'Álbumes', marca: 'BTS' },
-  { sku: 'LS-BTS-01', nombre: 'Official Lightstick MotS', categoria: 'Lightsticks', marca: 'BTS' },
-  { sku: 'PH-ENH-01', nombre: 'Photocard Romance: Untold', categoria: 'Photocards', marca: 'Enhypen' },
-  { sku: 'TEC-APP-01', nombre: 'iPhone 15 Pro Max 256GB', categoria: 'Tecnología', marca: 'Apple' },
 ];
 
 export default function App() {
