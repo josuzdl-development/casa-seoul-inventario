@@ -155,7 +155,7 @@ export default function App() {
     e.preventDefault();
     const { username, password } = loginForm;
     
-    if (username === 'admin' && password === 'admin123') {
+    if (username === 'admin' && password === '@dmin135') {
       setUserRole('admin');
       setActiveTab('stock');
     } else if (username === 'invitado' && password === 'invitado123') {
