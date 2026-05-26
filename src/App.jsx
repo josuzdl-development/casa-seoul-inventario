@@ -41,7 +41,7 @@ export default function App() {
 
   const [formProducto, setFormProducto] = useState({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '' });
   const [formIngreso, setFormIngreso] = useState({
-    loteId: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: ''
+    loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: ''
   });
   const [formSalida, setFormSalida] = useState({
     sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: ''
@@ -146,6 +146,12 @@ export default function App() {
     const marcas = new Set(productos.map(p => p.marca));
     return Array.from(marcas);
   }, [productos]);
+
+  const lotesUnicos = useMemo(() => {
+    // Extraemos todos los lotes únicos del historial de ingresos
+    const lotes = new Set(ingresos.map(i => i.loteId).filter(Boolean));
+    return Array.from(lotes);
+  }, [ingresos]);
 
   // --- 4. EXPORTAR A CSV ---
   const handleExportCSV = () => {
@@ -253,6 +259,15 @@ export default function App() {
     e.preventDefault();
     if (!firebaseUser || !db || userRole !== 'admin') return;
 
+    // Lógica inteligente para definir el ID del lote final
+    const finalLoteId = formIngreso.loteSelect === '+ Nuevo Lote' ? formIngreso.loteNuevo.trim().toUpperCase() : formIngreso.loteSelect;
+
+    if (!finalLoteId) {
+      setNotification('❌ Por favor, selecciona o escribe un ID de Lote');
+      setTimeout(() => setNotification(''), 3000);
+      return;
+    }
+
     const cFob = Number(formIngreso.costoFob || 0);
     const cFlete = Number(formIngreso.flete || 0);
     const cAduanas = Number(formIngreso.aduanas || 0);
@@ -263,10 +278,31 @@ export default function App() {
 
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
-        ...formIngreso, costoTotalLote, costoUnitarioReal, createdAt: serverTimestamp()
+        loteId: finalLoteId,
+        sku: formIngreso.sku,
+        cantidad: formIngreso.cantidad,
+        costoFob: formIngreso.costoFob,
+        flete: formIngreso.flete,
+        aduanas: formIngreso.aduanas,
+        igv: formIngreso.igv,
+        costoTotalLote, 
+        costoUnitarioReal, 
+        createdAt: serverTimestamp()
       });
       setNotification('✅ Ingreso registrado con éxito');
-      setFormIngreso({ loteId: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '' });
+      
+      // SÚPER TRUCO: Limpiamos el formulario PERO mantenemos el lote seleccionado
+      setFormIngreso({ 
+        loteSelect: finalLoteId, 
+        loteNuevo: '', 
+        sku: '', 
+        cantidad: '', 
+        costoFob: '', 
+        flete: '', 
+        aduanas: '', 
+        igv: '' 
+      });
+      
       setTimeout(() => setNotification(''), 3000);
     } catch (error) {
       setNotification('❌ Error al guardar');
@@ -667,10 +703,20 @@ export default function App() {
                 </div>
                 <form onSubmit={handleGuardarIngreso} className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-4">
+                    
+                    {/* SELECTOR DE LOTE INTELIGENTE */}
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">ID de Lote / Importación</label>
-                      <input value={formIngreso.loteId} onChange={e => setFormIngreso({...formIngreso, loteId: e.target.value})} className="w-full border p-2 rounded outline-none uppercase" placeholder="Ej: STOCK-INICIAL" />
+                      <select required value={formIngreso.loteSelect} onChange={e => setFormIngreso({...formIngreso, loteSelect: e.target.value})} className="w-full border p-2 rounded outline-none bg-white">
+                        <option value="">Selecciona un lote...</option>
+                        {lotesUnicos.map(lote => <option key={lote} value={lote}>{lote}</option>)}
+                        <option value="+ Nuevo Lote" className="font-bold text-indigo-600">+ Añadir nuevo lote...</option>
+                      </select>
+                      {formIngreso.loteSelect === '+ Nuevo Lote' && (
+                        <input required autoFocus value={formIngreso.loteNuevo} onChange={e => setFormIngreso({...formIngreso, loteNuevo: e.target.value})} className="w-full border p-2 rounded outline-none mt-2 uppercase focus:ring-2 focus:ring-indigo-500" placeholder="Ej: LOTE-COREA-02" />
+                      )}
                     </div>
+                    
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Producto (SKU)</label>
                       <select required value={formIngreso.sku} onChange={e => setFormIngreso({...formIngreso, sku: e.target.value})} className="w-full border p-2 rounded outline-none">
