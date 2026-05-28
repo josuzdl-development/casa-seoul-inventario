@@ -3,7 +3,7 @@ import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, DollarSign, Award } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, DollarSign, Award, Eye, Camera } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -32,7 +32,7 @@ export default function App() {
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   
   // UI STATES
-  const [activeTab, setActiveTab] = useState('dashboard'); // Arranca en el Dashboard
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [isKoreaView, setIsKoreaView] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -45,11 +45,16 @@ export default function App() {
   const [notification, setNotification] = useState('');
 
   // FORM STATES Y BUSCADORES
-  const [formProducto, setFormProducto] = useState({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '' });
+  const [formProducto, setFormProducto] = useState({ 
+    nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '',
+    descripcion: '', imagen: '' 
+  });
   const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '' });
   const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' });
+  
   const [editingItem, setEditingItem] = useState(null);
-  const [receiptItem, setReceiptItem] = useState(null); // Estado para el ticket de impresión
+  const [receiptItem, setReceiptItem] = useState(null);
+  const [viewProductDetails, setViewProductDetails] = useState(null); // Nuevo estado para previsualizar productos
   
   const [ingresoSearch, setIngresoSearch] = useState('');
   const [showIngresoDropdown, setShowIngresoDropdown] = useState(false);
@@ -125,32 +130,22 @@ export default function App() {
     return finalStock;
   }, [ingresos, salidas, userRole, productos]);
 
-  // --- ANALÍTICA FINANCIERA ---
   const finanzas = useMemo(() => {
-    let totalVentas = 0;
-    let totalCostoVendido = 0;
-    let valorInventario = 0;
-    let unidadesVendidas = 0;
-
+    let totalVentas = 0; let totalCostoVendido = 0; let valorInventario = 0; let unidadesVendidas = 0;
     salidas.forEach(sal => {
       totalVentas += Number(sal.precioTotal || 0);
       unidadesVendidas += Number(sal.cantidad || 0);
       const prodCosto = stockCalculado.find(s => s.sku === sal.sku)?.costoPromedio || 0;
       totalCostoVendido += (prodCosto * Number(sal.cantidad));
     });
-
-    stockCalculado.forEach(item => {
-      if (item.stockActual > 0) valorInventario += (item.stockActual * item.costoPromedio);
-    });
-
+    stockCalculado.forEach(item => { if (item.stockActual > 0) valorInventario += (item.stockActual * item.costoPromedio); });
     return { totalVentas, gananciaBruta: totalVentas - totalCostoVendido, valorInventario, unidadesVendidas };
   }, [salidas, stockCalculado]);
 
-  // --- CRM CLIENTES ---
   const directorioClientes = useMemo(() => {
     const clientes = {};
     salidas.forEach(sal => {
-      if(!sal.documentoCliente || sal.documentoCliente.trim() === '') return; // Ignorar ventas sin cliente
+      if(!sal.documentoCliente || sal.documentoCliente.trim() === '') return;
       const idCliente = sal.documentoCliente.trim().toUpperCase();
       if (!clientes[idCliente]) clientes[idCliente] = { id: idCliente, compras: 0, gastoTotal: 0, ultimaCompra: sal.createdAt };
       clientes[idCliente].compras += 1;
@@ -205,7 +200,7 @@ export default function App() {
 
     const finalCategoria = formProducto.categoriaSelect === '+ Nueva Categoría' ? formProducto.categoriaNueva.trim() : formProducto.categoriaSelect;
     const finalMarca = formProducto.marcaSelect === '+ Nueva Marca' ? formProducto.marcaNueva.trim() : formProducto.marcaSelect;
-    if (!finalCategoria || !finalMarca || !formProducto.nombre.trim()) return showNotif('❌ Completa todos los campos');
+    if (!finalCategoria || !finalMarca || !formProducto.nombre.trim()) return showNotif('❌ Completa todos los campos principales');
 
     const prefixCat = finalCategoria.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
     const prefixMar = finalMarca.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
@@ -215,9 +210,17 @@ export default function App() {
     while (productos.some(p => p.sku === skuGenerado)) { nextNumber++; skuGenerado = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`; }
 
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), { nombre: formProducto.nombre.trim(), categoria: finalCategoria, marca: finalMarca, sku: skuGenerado, createdAt: serverTimestamp() });
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), { 
+        nombre: formProducto.nombre.trim(), 
+        categoria: finalCategoria, 
+        marca: finalMarca, 
+        sku: skuGenerado, 
+        descripcion: formProducto.descripcion.trim(),
+        imagen: formProducto.imagen.trim(),
+        createdAt: serverTimestamp() 
+      });
       showNotif(`✅ Producto añadido. SKU asignado: ${skuGenerado}`);
-      setFormProducto({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '' });
+      setFormProducto({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' });
     } catch (error) { showNotif('❌ Error al guardar producto'); }
   };
 
@@ -310,7 +313,7 @@ export default function App() {
       </div>
       <div className="overflow-x-auto rounded-xl border border-slate-100">
         <table className="min-w-full text-left border-collapse">
-          <thead><tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider font-bold"><th className="p-5 border-b">SKU / Item ID</th><th className="p-5 border-b">Product Name</th><th className="p-5 border-b">Category</th><th className="p-5 border-b text-right">Current Stock</th><th className="p-5 border-b text-center">Status</th></tr></thead>
+          <thead><tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider font-bold"><th className="p-5 border-b">SKU / Item ID</th><th className="p-5 border-b">Product Name</th><th className="p-5 border-b">Category</th><th className="p-5 border-b text-right">Current Stock</th><th className="p-5 border-b text-center">Status / Details</th></tr></thead>
           <tbody className="text-slate-700 divide-y divide-slate-100 bg-white">
             {stockFiltrado.map(item => (
               <tr key={item.sku} className="hover:bg-slate-50 transition-colors group">
@@ -318,7 +321,10 @@ export default function App() {
                 <td className="p-5 font-bold">{item.nombre} <span className="block font-normal text-xs text-slate-400 mt-1">{item.marca}</span></td>
                 <td className="p-5"><span className="px-3 py-1 bg-slate-100 rounded-lg text-xs font-medium">{item.categoria}</span></td>
                 <td className="p-5 font-black text-xl text-right">{item.stockActual}</td>
-                <td className="p-5 text-center">{item.stockActual <= 5 ? <span className="px-3 py-1 bg-red-50 text-red-600 rounded-lg text-xs font-bold border border-red-100">REORDER</span> : <span className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-xs font-bold border border-emerald-100">IN STOCK</span>}</td>
+                <td className="p-5 text-center flex items-center justify-center gap-3">
+                  {item.stockActual <= 5 ? <span className="px-3 py-1 bg-red-50 text-red-600 rounded-lg text-xs font-bold border border-red-100">REORDER</span> : <span className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-lg text-xs font-bold border border-emerald-100">IN STOCK</span>}
+                  <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors" title="View Details"><Eye className="w-4 h-4"/></button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -444,7 +450,7 @@ export default function App() {
                             <td className="p-5 text-slate-400 text-xs font-medium">{cliente.ultimaCompra?.toDate().toLocaleDateString() || '-'}</td>
                           </tr>
                         ))}
-                        {directorioClientes.length === 0 && <tr><td colSpan="4" className="p-12 text-center text-slate-400 font-medium">No hay clientes con nombre registrado.</td></tr>}
+                        {directorioClientes.length === 0 && <tr><td colSpan="4" className="p-12 text-center text-slate-400 font-medium">No hay clientes registrados.</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -462,7 +468,7 @@ export default function App() {
                   </div>
                   <div className="overflow-x-auto rounded-xl border border-slate-100">
                     <table className="min-w-full text-left text-sm whitespace-nowrap">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Ingresos</th><th className="p-4 text-center">Salidas</th><th className="p-4 text-right text-indigo-600">Stock Real</th><th className="p-4 text-right">Costo Promedio</th></tr></thead>
+                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Ingresos</th><th className="p-4 text-center">Salidas</th><th className="p-4 text-right text-indigo-600">Stock Real</th><th className="p-4 text-right">Costo Promedio</th><th className="p-4 text-center">Ver</th></tr></thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
                         {stockFiltrado.map(item => (
                           <tr key={item.sku} className="hover:bg-slate-50 transition-colors">
@@ -471,9 +477,12 @@ export default function App() {
                             <td className="p-4 text-center text-blue-600 font-bold bg-blue-50/30">{item.totalIngresos}</td><td className="p-4 text-center text-orange-500 font-bold bg-orange-50/30">{item.totalSalidas}</td>
                             <td className="p-4 text-right font-black text-xl"><span className={item.stockActual <= 5 ? 'text-red-500 bg-red-50 px-3 py-1 rounded-lg' : 'text-emerald-600'}>{item.stockActual}</span></td>
                             <td className="p-4 text-right text-slate-600 font-bold">S/ {item.costoPromedio.toFixed(2)}</td>
+                            <td className="p-4 text-center">
+                              <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"><Eye className="w-5 h-5"/></button>
+                            </td>
                           </tr>
                         ))}
-                        {stockFiltrado.length === 0 && <tr><td colSpan="6" className="p-12 text-center text-slate-400 font-medium">No se encontraron productos.</td></tr>}
+                        {stockFiltrado.length === 0 && <tr><td colSpan="7" className="p-12 text-center text-slate-400 font-medium">No se encontraron productos.</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -483,7 +492,7 @@ export default function App() {
               {activeTab === 'catalogo' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Tags className="text-indigo-600 w-8 h-8" /> Catálogo Maestro</h2></div>
-                  <div className="mb-8 bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3 items-start text-sm text-blue-800"><Info className="w-5 h-5 shrink-0 mt-0.5 text-blue-500" /><div><strong className="block mb-1">💡 Auto-SKU Inteligente</strong>Escribe el nombre, elige una marca y el sistema asignará el código automáticamente.</div></div>
+                  <div className="mb-8 bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3 items-start text-sm text-blue-800"><Info className="w-5 h-5 shrink-0 mt-0.5 text-blue-500" /><div><strong className="block mb-1">💡 Auto-SKU Inteligente y Multimedia</strong>Agrega una descripción y pega un enlace (URL) de una foto de Google para que los socios en Corea reconozcan el producto visualmente.</div></div>
                   <form onSubmit={handleGuardarProducto} className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-100 mb-8">
                     <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">Nombre</label><input required value={formProducto.nombre} onChange={e => setFormProducto({...formProducto, nombre: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" /></div>
                     <div>
@@ -496,10 +505,16 @@ export default function App() {
                       <select required value={formProducto.marcaSelect} onChange={e => setFormProducto({...formProducto, marcaSelect: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl outline-none mb-2"><option value="">Selecciona...</option>{marcasUnicas.map(m => <option key={m} value={m}>{m}</option>)}<option value="+ Nueva Marca" className="font-bold text-indigo-600">+ Añadir nueva...</option></select>
                       {formProducto.marcaSelect === '+ Nueva Marca' && <input required autoFocus value={formProducto.marcaNueva} onChange={e => setFormProducto({...formProducto, marcaNueva: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none" />}
                     </div>
-                    <div className="md:col-span-3 flex justify-end"><button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold">Guardar y Generar SKU</button></div>
+                    
+                    <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-200">
+                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">URL de la Imagen <span className="font-normal lowercase text-slate-400">(Opcional)</span></label><input value={formProducto.imagen} onChange={e => setFormProducto({...formProducto, imagen: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Pega el enlace web de la foto..." /></div>
+                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">Descripción <span className="font-normal lowercase text-slate-400">(Opcional)</span></label><textarea value={formProducto.descripcion} onChange={e => setFormProducto({...formProducto, descripcion: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" rows="1" placeholder="Detalles de la versión, color, etc..."></textarea></div>
+                    </div>
+
+                    <div className="md:col-span-3 flex justify-end mt-2"><button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold">Guardar y Generar SKU</button></div>
                   </form>
                   <div className="overflow-x-auto rounded-xl border border-slate-100">
-                    <table className="min-w-full text-sm text-left whitespace-nowrap"><thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-right">Acción</th></tr></thead><tbody className="divide-y divide-slate-100">{productos.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-mono font-bold text-indigo-600">{p.sku}</td><td className="p-4 font-bold text-slate-700">{p.nombre}</td><td className="p-4 text-right"><button onClick={() => handleDelete('productos', p.id)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg"><Trash2 className="w-5 h-5"/></button></td></tr>))}</tbody></table>
+                    <table className="min-w-full text-sm text-left whitespace-nowrap"><thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Detalles</th><th className="p-4 text-right">Acción</th></tr></thead><tbody className="divide-y divide-slate-100">{productos.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-mono font-bold text-indigo-600">{p.sku}</td><td className="p-4 font-bold text-slate-700">{p.nombre}</td><td className="p-4 text-center"><button onClick={() => setViewProductDetails(p)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"><Eye className="w-5 h-5"/></button></td><td className="p-4 text-right"><button onClick={() => handleDelete('productos', p.id)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg"><Trash2 className="w-5 h-5"/></button></td></tr>))}</tbody></table>
                   </div>
                 </div>
               )}
@@ -531,8 +546,8 @@ export default function App() {
                       </div>
                     </div>
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-5">
-                      <h3 className="font-black flex items-center gap-2 text-slate-700 uppercase text-sm border-b pb-3"><Calculator className="w-5 h-5 text-slate-400"/> Costos Prorrateados</h3>
-                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">FOB Total (S/)</label><input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
+                      <h3 className="font-black flex items-center gap-2 text-slate-700 uppercase text-sm border-b pb-3"><Calculator className="w-5 h-5 text-slate-400"/> Costos (S/) <span className="font-normal text-xs text-slate-400 ml-auto">Opcional</span></h3>
+                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">FOB Total</label><input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
                     </div>
                     <div className="md:col-span-2 flex justify-end mt-2"><button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-10 py-4 rounded-xl font-black text-lg">Sumar Stock</button></div>
                   </form>
@@ -608,7 +623,6 @@ export default function App() {
             </div>
           )}
 
-          {/* TICKET DE IMPRESIÓN (NUEVO) */}
           {receiptItem && (
             <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 print:bg-white print:static print:inset-auto print:block">
               <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-8 relative print:shadow-none print:w-full">
@@ -635,7 +649,6 @@ export default function App() {
             </div>
           )}
 
-          {/* MODAL EDICIÓN */}
           {editingItem && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4 print:hidden">
               <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 md:p-8 relative">
@@ -648,6 +661,33 @@ export default function App() {
                   </div>
                   <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl">Guardar</button>
                 </form>
+              </div>
+            </div>
+          )}
+
+          {viewProductDetails && (
+            <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-[150] p-4">
+              <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden relative flex flex-col md:flex-row max-h-[90vh]">
+                <button onClick={() => setViewProductDetails(null)} className="absolute top-4 right-4 bg-black/50 text-white rounded-full p-1 z-10 hover:bg-black transition-colors"><X className="w-6 h-6"/></button>
+                <div className="md:w-1/2 bg-slate-100 flex items-center justify-center min-h-[250px] md:min-h-[400px]">
+                   {viewProductDetails.imagen ? (
+                      <img src={viewProductDetails.imagen} alt={viewProductDetails.nombre} className="w-full h-full object-cover" />
+                   ) : (
+                      <div className="text-slate-400 flex flex-col items-center"><Camera className="w-16 h-16 mb-2 opacity-50"/> <span>Sin imagen</span></div>
+                   )}
+                </div>
+                <div className="md:w-1/2 p-6 md:p-8 flex flex-col justify-center overflow-y-auto">
+                   <div className="text-xs font-bold tracking-widest text-indigo-500 mb-2">{viewProductDetails.sku}</div>
+                   <h2 className="text-2xl font-black text-slate-900 leading-tight mb-3">{viewProductDetails.nombre}</h2>
+                   <div className="flex gap-2 mb-6">
+                      <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-lg text-xs font-bold">{viewProductDetails.marca}</span>
+                      <span className="bg-indigo-50 text-indigo-600 px-3 py-1 rounded-lg text-xs font-bold">{viewProductDetails.categoria}</span>
+                   </div>
+                   <div>
+                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Descripción del Producto</h3>
+                      <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">{viewProductDetails.descripcion || 'No se añadió descripción para este artículo.'}</p>
+                   </div>
+                </div>
               </div>
             </div>
           )}
