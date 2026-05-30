@@ -215,17 +215,37 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target.result;
-      const rows = text.split('\n');
+      
+      // Separamos por salto de línea soportando Windows (\r\n) y Unix (\n)
+      const rows = text.split(/\r?\n/);
       const parsedData = [];
+      
+      // Súper Inteligencia: Detectar si el Excel guardó el CSV con punto y coma (Latinoamérica), coma o tabulación
+      const firstLine = rows[0] || '';
+      const delimiter = firstLine.includes(';') ? ';' : (firstLine.includes('\t') ? '\t' : ',');
       
       for (let i = 1; i < rows.length; i++) { 
         if (!rows[i].trim()) continue;
-        const cols = rows[i].split(','); 
-        if (cols.length >= 5) {
+        
+        // Regex robusto para separar las columnas ignorando el delimitador si está entre comillas (Ej: "Album, BTS")
+        const regex = new RegExp(`(?:^|\\${delimiter})(\\"(?:[^\"]+|\"\")*\\"|[^\\${delimiter}]*)`, 'g');
+        const cols = [];
+        let match;
+        while ((match = regex.exec(rows[i])) !== null) {
+          let val = match[1] || '';
+          // Limpiar comillas iniciales y finales que pone Excel
+          if (val.startsWith('"') && val.endsWith('"')) {
+            val = val.slice(1, -1).replace(/""/g, '"');
+          }
+          cols.push(val.trim());
+        }
+
+        // Validación: Solo importamos si hay nombre para evitar datos basura
+        if (cols.length >= 1 && cols[0]) {
           parsedData.push({
-            nombre: cols[0].replace(/['"]/g, '').trim(),
-            categoria: cols[1].replace(/['"]/g, '').trim() || 'Importación',
-            marca: cols[2].replace(/['"]/g, '').trim() || 'Genérica',
+            nombre: cols[0] || 'Sin Nombre',
+            categoria: cols[1] || 'Importación',
+            marca: cols[2] || 'Genérica',
             cantidad: parseInt(cols[3]) || 0,
             costoTotal: parseFloat(cols[4]) || 0
           });
@@ -234,7 +254,8 @@ export default function App() {
       setCsvPreview(parsedData);
       e.target.value = null; 
     };
-    reader.readAsText(file);
+    // Leer como UTF-8 evita que las ñ y las tildes se conviertan en símbolos extraños
+    reader.readAsText(file, 'UTF-8');
   };
 
   const procesarImportacionMasiva = async () => {
@@ -564,7 +585,7 @@ export default function App() {
                   </div>
                   <div className="overflow-x-auto rounded-xl border border-slate-100">
                     <table className="min-w-full text-left text-sm whitespace-nowrap">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Ingresos</th><th className="p-4 text-center">Salidas</th><th className="p-4 text-right text-indigo-600">Stock Real</th><th className="p-4 text-right">Costo Promedio</th><th className="p-4 text-center">Ver</th></tr></thead>
+                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Ingresos</th><th className="p-4 text-center">Salidas</th><th className="p-4 text-right text-indigo-600">Stock Real</th><th className="p-4 text-right">Costo Promedio</th><th className="p-4 text-center">Acciones</th></tr></thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
                         {stockFiltrado.map(item => (
                           <tr key={item.sku} className="hover:bg-slate-50 transition-colors">
@@ -573,8 +594,10 @@ export default function App() {
                             <td className="p-4 text-center text-blue-600 font-bold bg-blue-50/30">{item.totalIngresos}</td><td className="p-4 text-center text-orange-500 font-bold bg-orange-50/30">{item.totalSalidas}</td>
                             <td className="p-4 text-right font-black text-xl"><span className={item.stockActual <= 5 ? 'text-red-500 bg-red-50 px-3 py-1 rounded-lg' : 'text-emerald-600'}>{item.stockActual}</span></td>
                             <td className="p-4 text-right text-slate-600 font-bold">S/ {item.costoPromedio.toFixed(2)}</td>
-                            <td className="p-4 text-center">
-                              <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"><Eye className="w-5 h-5"/></button>
+                            <td className="p-4 text-center flex items-center justify-center gap-1">
+                              <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors" title="Ver Detalles"><Eye className="w-5 h-5"/></button>
+                              <button onClick={() => setEditingItem({ type: 'productos', id: item.id, data: item })} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar Producto"><Edit2 className="w-5 h-5"/></button>
+                              <button onClick={() => handleDelete('productos', item.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors" title="Eliminar Producto"><Trash2 className="w-5 h-5"/></button>
                             </td>
                           </tr>
                         ))}
@@ -827,13 +850,21 @@ export default function App() {
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4 print:hidden">
               <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 md:p-8 relative">
                 <button onClick={() => setEditingItem(null)} className="absolute top-6 right-6 text-slate-400 bg-slate-100 rounded-full p-1"><X className="w-6 h-6" /></button>
-                <h2 className="text-2xl font-black text-slate-900 mb-6"><Edit2 className="w-6 h-6 inline mr-2 text-indigo-600" /> Corregir</h2>
+                <h2 className="text-2xl font-black text-slate-900 mb-6"><Edit2 className="w-6 h-6 inline mr-2 text-indigo-600" /> Corregir {editingItem.type === 'productos' ? 'Catálogo' : ''}</h2>
                 <form onSubmit={handleUpdateItem} className="space-y-5">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div><label className="block text-xs font-bold text-slate-500 mb-2">Cant</label><input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
-                    {editingItem.type === 'salidas' && <div><label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label><input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>}
-                  </div>
-                  <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl">Guardar</button>
+                  {editingItem.type !== 'productos' ? (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div><label className="block text-xs font-bold text-slate-500 mb-2">Cant</label><input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
+                      {editingItem.type === 'salidas' && <div><label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label><input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>}
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div><label className="block text-xs font-bold text-slate-500 mb-2">Nombre del Producto</label><input required value={editingItem.data.nombre || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, nombre: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" /></div>
+                      <div><label className="block text-xs font-bold text-slate-500 mb-2">URL de Imagen</label><input value={editingItem.data.imagen || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, imagen: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" placeholder="https://..." /></div>
+                      <div><label className="block text-xs font-bold text-slate-500 mb-2">Descripción</label><textarea value={editingItem.data.descripcion || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, descripcion: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" rows="3"></textarea></div>
+                    </div>
+                  )}
+                  <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl">Guardar Cambios</button>
                 </form>
               </div>
             </div>
