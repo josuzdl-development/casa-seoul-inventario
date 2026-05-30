@@ -113,7 +113,7 @@ export default function App() {
     productos.forEach(prod => { stockMap[prod.sku] = { ...prod, totalIngresos: 0, totalSalidas: 0, stockActual: 0, costoPromedio: 0, valorTotal: 0, ventasGeneradas: 0 }; });
 
     ingresos.forEach(ing => {
-      if (!stockMap[ing.sku]) stockMap[ing.sku] = { sku: ing.sku, nombre: 'Descatalogado', totalIngresos: 0, totalSalidas: 0, stockActual: 0, valorTotal: 0, categoria: 'Otros', marca: '-', ventasGeneradas: 0 };
+      if (!stockMap[ing.sku]) stockMap[ing.sku] = { sku: ing.sku, nombre: 'Descatalogado', totalIngresos: 0, totalSalidas: 0, stockActual: 0, valorTotal: 0, categoria: 'Otros', marca: '-', ventasGeneradas: 0, id: null };
       stockMap[ing.sku].totalIngresos += Number(ing.cantidad);
       stockMap[ing.sku].valorTotal += (Number(ing.costoUnitarioReal) * Number(ing.cantidad));
     });
@@ -200,8 +200,8 @@ export default function App() {
   };
 
   const descargarPlantilla = () => {
-    const headers = ['Nombre_Producto', 'Categoria', 'Marca', 'Cantidad', 'Costo_Total_Soles'];
-    const rowEjemplo = ['Album BTS Proof', 'Álbumes', 'BTS', '10', '150.50'];
+    const headers = ['Nombre_Producto', 'Categoria', 'Marca', 'Cantidad', 'Costo_Unitario_Soles'];
+    const rowEjemplo = ['Album BTS Proof', 'Álbumes', 'BTS', '10', '15.50'];
     const csvContent = [headers.join(','), rowEjemplo.join(',')].join('\n');
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
@@ -247,7 +247,7 @@ export default function App() {
             categoria: cols[1] || 'Importación',
             marca: cols[2] || 'Genérica',
             cantidad: parseInt(cols[3]) || 0,
-            costoTotal: parseFloat(cols[4]) || 0
+            costoUnitario: parseFloat(cols[4]) || 0
           });
         }
       }
@@ -292,11 +292,13 @@ export default function App() {
           currentProducts.push(nuevoProducto); 
         }
 
-        const costoUnitarioReal = item.costoTotal / item.cantidad;
+        const costoUnitarioReal = item.costoUnitario;
+        const costoTotalLote = item.costoUnitario * item.cantidad;
+
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
           loteId: importLote.toUpperCase(), sku: finalSku, cantidad: item.cantidad,
-          costoFob: item.costoTotal, flete: 0, aduanas: 0, igv: 0,
-          costoTotalLote: item.costoTotal, costoUnitarioReal: costoUnitarioReal, createdAt: serverTimestamp()
+          costoFob: costoTotalLote, flete: 0, aduanas: 0, igv: 0,
+          costoTotalLote: costoTotalLote, costoUnitarioReal: costoUnitarioReal, createdAt: serverTimestamp()
         });
       }
 
@@ -373,9 +375,29 @@ export default function App() {
     } catch (error) { showNotif('❌ Error al registrar venta'); }
   };
 
+  // LÓGICA DE BORRADO GENÉRICA
   const handleDelete = async (coleccion, id) => {
+    if (!id) return showNotif('❌ Error: Registro inválido o ya eliminado.');
     if (!window.confirm('¿Seguro que deseas eliminar este registro?')) return;
     try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', coleccion, id)); showNotif('✅ Registro eliminado'); } catch (error) { showNotif('❌ Error al eliminar'); }
+  };
+
+  // CANDADO DE SEGURIDAD PARA BORRAR PRODUCTOS
+  const handleDeleteProducto = (id, sku) => {
+    // Verificamos si el producto tiene ingresos o salidas asociadas
+    const tieneHistorial = ingresos.some(i => i.sku === sku) || salidas.some(s => s.sku === sku);
+    
+    if (tieneHistorial) {
+      showNotif('❌ BLOQUEADO: Este producto tiene stock o historial. Elimina sus ingresos/ventas en "Historial" primero.');
+      return;
+    }
+    
+    if (!id) {
+      showNotif('❌ Este producto ya no existe en el catálogo.');
+      return;
+    }
+
+    handleDelete('productos', id);
   };
 
   const handleUpdateItem = async (e) => {
@@ -597,7 +619,7 @@ export default function App() {
                             <td className="p-4 text-center flex items-center justify-center gap-1">
                               <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors" title="Ver Detalles"><Eye className="w-5 h-5"/></button>
                               <button onClick={() => setEditingItem({ type: 'productos', id: item.id, data: item })} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar Producto"><Edit2 className="w-5 h-5"/></button>
-                              <button onClick={() => handleDelete('productos', item.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors" title="Eliminar Producto"><Trash2 className="w-5 h-5"/></button>
+                              <button onClick={() => handleDeleteProducto(item.id, item.sku)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors" title="Eliminar Producto"><Trash2 className="w-5 h-5"/></button>
                             </td>
                           </tr>
                         ))}
@@ -633,7 +655,7 @@ export default function App() {
                     <div className="md:col-span-3 flex justify-end mt-2"><button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold">Guardar y Generar SKU</button></div>
                   </form>
                   <div className="overflow-x-auto rounded-xl border border-slate-100">
-                    <table className="min-w-full text-sm text-left whitespace-nowrap"><thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Detalles</th><th className="p-4 text-right">Acción</th></tr></thead><tbody className="divide-y divide-slate-100">{productos.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-mono font-bold text-indigo-600">{p.sku}</td><td className="p-4 font-bold text-slate-700">{p.nombre}</td><td className="p-4 text-center"><button onClick={() => setViewProductDetails(p)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"><Eye className="w-5 h-5"/></button></td><td className="p-4 text-right"><button onClick={() => handleDelete('productos', p.id)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg"><Trash2 className="w-5 h-5"/></button></td></tr>))}</tbody></table>
+                    <table className="min-w-full text-sm text-left whitespace-nowrap"><thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Detalles</th><th className="p-4 text-right">Acción</th></tr></thead><tbody className="divide-y divide-slate-100">{productos.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-mono font-bold text-indigo-600">{p.sku}</td><td className="p-4 font-bold text-slate-700">{p.nombre}</td><td className="p-4 text-center"><button onClick={() => setViewProductDetails(p)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"><Eye className="w-5 h-5"/></button></td><td className="p-4 text-right"><button onClick={() => handleDeleteProducto(p.id, p.sku)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg"><Trash2 className="w-5 h-5"/></button></td></tr>))}</tbody></table>
                   </div>
                 </div>
               )}
@@ -688,12 +710,12 @@ export default function App() {
                       <div className="max-h-64 overflow-y-auto">
                         <table className="min-w-full text-sm text-left whitespace-nowrap">
                           <thead className="bg-white text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-100 sticky top-0">
-                            <tr><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Marca</th><th className="p-4 text-center">Cant.</th><th className="p-4 text-right">Costo Prorrateado</th></tr>
+                            <tr><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Marca</th><th className="p-4 text-center">Cant.</th><th className="p-4 text-right">Costo Unitario</th><th className="p-4 text-right">Costo Total</th></tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-slate-50/30">
                             {csvPreview.map((item, idx) => (
                               <tr key={idx}>
-                                <td className="p-4 font-bold text-slate-700">{item.nombre}</td><td className="p-4 text-slate-500">{item.categoria}</td><td className="p-4 text-slate-500">{item.marca}</td><td className="p-4 text-center font-black text-blue-600">{item.cantidad}</td><td className="p-4 text-right font-medium text-slate-600">S/ {item.costoTotal.toFixed(2)}</td>
+                                <td className="p-4 font-bold text-slate-700">{item.nombre}</td><td className="p-4 text-slate-500">{item.categoria}</td><td className="p-4 text-slate-500">{item.marca}</td><td className="p-4 text-center font-black text-blue-600">{item.cantidad}</td><td className="p-4 text-right font-medium text-slate-600">S/ {item.costoUnitario.toFixed(2)}</td><td className="p-4 text-right font-black text-indigo-600">S/ {(item.costoUnitario * item.cantidad).toFixed(2)}</td>
                               </tr>
                             ))}
                           </tbody>
