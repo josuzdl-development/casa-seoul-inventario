@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -42,12 +42,11 @@ export default function App() {
   const [productos, setProductos] = useState([]);
   const [ingresos, setIngresos] = useState([]);
   const [salidas, setSalidas] = useState([]);
-  const [notification, setNotification] = useState('');
+  const [notification, setNotification] = useState({ msg: '', type: '' });
 
   // FORM STATES Y BUSCADORES
   const [formProducto, setFormProducto] = useState({ 
-    nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '',
-    descripcion: '', imagen: '' 
+    nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' 
   });
   const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '' });
   const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' });
@@ -65,6 +64,9 @@ export default function App() {
   const [csvPreview, setCsvPreview] = useState([]);
   const [importLote, setImportLote] = useState('');
   const [isImporting, setIsImporting] = useState(false);
+
+  // REFERENCIAS PARA MODO POS (ESCANER)
+  const scannerInputRef = useRef(null);
 
   useEffect(() => {
     if (!auth) return;
@@ -135,6 +137,13 @@ export default function App() {
     return finalStock;
   }, [ingresos, salidas, userRole, productos]);
 
+  // --- CÁLCULOS DE ALERTAS (NUEVO) ---
+  const alertasStock = useMemo(() => {
+    const agotados = stockCalculado.filter(p => p.stockActual <= 0 && p.totalIngresos > 0);
+    const criticos = stockCalculado.filter(p => p.stockActual > 0 && p.stockActual <= 5);
+    return { agotados, criticos };
+  }, [stockCalculado]);
+
   const finanzas = useMemo(() => {
     let totalVentas = 0; let totalCostoVendido = 0; let valorInventario = 0; let unidadesVendidas = 0;
     salidas.forEach(sal => {
@@ -183,8 +192,8 @@ export default function App() {
   const marcasUnicas = useMemo(() => Array.from(new Set(productos.map(p => p.marca))), [productos]);
   const lotesUnicos = useMemo(() => Array.from(new Set(ingresos.map(i => i.loteId).filter(Boolean))), [ingresos]);
 
-  const showNotif = (msg) => { setNotification(msg); setTimeout(() => setNotification(''), 4000); };
-  const handleLoginSubmit = async (e) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password); } catch (error) { showNotif('❌ Correo o contraseña incorrectos'); } };
+  const showNotif = (msg, type = 'success') => { setNotification({msg, type}); setTimeout(() => setNotification({msg: '', type: ''}), 4000); };
+  const handleLoginSubmit = async (e) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password); } catch (error) { showNotif('❌ Correo o contraseña incorrectos', 'error'); } };
   const handleLogout = async () => { try { await signOut(auth); setLoginForm({ email: '', password: '' }); } catch (error) { console.error(error); } };
   const changeTab = (tab) => { setActiveTab(tab); setIsSidebarOpen(false); };
 
@@ -215,60 +224,42 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target.result;
-      
-      // Separamos por salto de línea soportando Windows (\r\n) y Unix (\n)
       const rows = text.split(/\r?\n/);
       const parsedData = [];
-      
-      // Súper Inteligencia: Detectar si el Excel guardó el CSV con punto y coma (Latinoamérica), coma o tabulación
       const firstLine = rows[0] || '';
       const delimiter = firstLine.includes(';') ? ';' : (firstLine.includes('\t') ? '\t' : ',');
       
       for (let i = 1; i < rows.length; i++) { 
         if (!rows[i].trim()) continue;
-        
-        // Regex robusto para separar las columnas ignorando el delimitador si está entre comillas (Ej: "Album, BTS")
         const regex = new RegExp(`(?:^|\\${delimiter})(\\"(?:[^\"]+|\"\")*\\"|[^\\${delimiter}]*)`, 'g');
-        const cols = [];
-        let match;
+        const cols = []; let match;
         while ((match = regex.exec(rows[i])) !== null) {
           let val = match[1] || '';
-          // Limpiar comillas iniciales y finales que pone Excel
-          if (val.startsWith('"') && val.endsWith('"')) {
-            val = val.slice(1, -1).replace(/""/g, '"');
-          }
+          if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1).replace(/""/g, '"');
           cols.push(val.trim());
         }
-
-        // Validación: Solo importamos si hay nombre para evitar datos basura
         if (cols.length >= 1 && cols[0]) {
           parsedData.push({
-            nombre: cols[0] || 'Sin Nombre',
-            categoria: cols[1] || 'Importación',
-            marca: cols[2] || 'Genérica',
-            cantidad: parseInt(cols[3]) || 0,
-            costoUnitario: parseFloat(cols[4]) || 0
+            nombre: cols[0] || 'Sin Nombre', categoria: cols[1] || 'Importación', marca: cols[2] || 'Genérica',
+            cantidad: parseInt(cols[3]) || 0, costoUnitario: parseFloat(cols[4]) || 0
           });
         }
       }
       setCsvPreview(parsedData);
       e.target.value = null; 
     };
-    // Leer como UTF-8 evita que las ñ y las tildes se conviertan en símbolos extraños
     reader.readAsText(file, 'UTF-8');
   };
 
   const procesarImportacionMasiva = async () => {
-    if (!importLote.trim()) return showNotif('❌ Escribe un nombre para el Lote/Importación');
-    if (csvPreview.length === 0) return showNotif('❌ No hay datos para importar');
+    if (!importLote.trim()) return showNotif('❌ Escribe un nombre para el Lote', 'error');
+    if (csvPreview.length === 0) return showNotif('❌ No hay datos', 'error');
     setIsImporting(true);
 
     try {
       let currentProducts = [...productos];
-
       for (const item of csvPreview) {
         if (item.cantidad <= 0) continue;
-
         let productoExistente = currentProducts.find(p => p.nombre.toLowerCase() === item.nombre.toLowerCase());
         let finalSku = productoExistente ? productoExistente.sku : null;
 
@@ -276,53 +267,36 @@ export default function App() {
           const prefixCat = item.categoria.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
           const prefixMar = item.marca.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
           const basePrefix = `${prefixCat}-${prefixMar}`;
-          
           let nextNumber = currentProducts.filter(p => p.sku && p.sku.startsWith(basePrefix)).length + 1;
           finalSku = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`;
-          
-          while (currentProducts.some(p => p.sku === finalSku)) { 
-            nextNumber++; finalSku = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`; 
-          }
+          while (currentProducts.some(p => p.sku === finalSku)) { nextNumber++; finalSku = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`; }
 
-          const nuevoProducto = {
-            nombre: item.nombre, categoria: item.categoria, marca: item.marca, sku: finalSku, createdAt: serverTimestamp()
-          };
-          
+          const nuevoProducto = { nombre: item.nombre, categoria: item.categoria, marca: item.marca, sku: finalSku, createdAt: serverTimestamp() };
           await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), nuevoProducto);
           currentProducts.push(nuevoProducto); 
         }
 
-        const costoUnitarioReal = item.costoUnitario;
         const costoTotalLote = item.costoUnitario * item.cantidad;
-
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
           loteId: importLote.toUpperCase(), sku: finalSku, cantidad: item.cantidad,
           costoFob: costoTotalLote, flete: 0, aduanas: 0, igv: 0,
-          costoTotalLote: costoTotalLote, costoUnitarioReal: costoUnitarioReal, createdAt: serverTimestamp()
+          costoTotalLote: costoTotalLote, costoUnitarioReal: item.costoUnitario, createdAt: serverTimestamp()
         });
       }
-
-      showNotif('✅ Importación masiva completada con éxito');
-      setCsvPreview([]);
-      setImportLote('');
-      setActiveTab('stock');
-    } catch (error) {
-      console.error(error);
-      showNotif('❌ Hubo un error durante la importación');
-    } finally {
-      setIsImporting(false);
-    }
+      showNotif('✅ Importación completada');
+      setCsvPreview([]); setImportLote(''); setActiveTab('stock');
+    } catch (error) { showNotif('❌ Error en importación', 'error'); } finally { setIsImporting(false); }
   };
 
   // --- ACCIONES DE GUARDADO INDIVIDUAL ---
   const handleGuardarProducto = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db) return;
-    if (userRole !== 'admin') return showNotif('❌ No tienes permisos');
+    if (userRole !== 'admin') return showNotif('❌ No tienes permisos', 'error');
 
     const finalCategoria = formProducto.categoriaSelect === '+ Nueva Categoría' ? formProducto.categoriaNueva.trim() : formProducto.categoriaSelect;
     const finalMarca = formProducto.marcaSelect === '+ Nueva Marca' ? formProducto.marcaNueva.trim() : formProducto.marcaSelect;
-    if (!finalCategoria || !finalMarca || !formProducto.nombre.trim()) return showNotif('❌ Completa todos los campos principales');
+    if (!finalCategoria || !finalMarca || !formProducto.nombre.trim()) return showNotif('❌ Completa campos obligatorios', 'error');
 
     const prefixCat = finalCategoria.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
     const prefixMar = finalMarca.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
@@ -336,16 +310,16 @@ export default function App() {
         nombre: formProducto.nombre.trim(), categoria: finalCategoria, marca: finalMarca, sku: skuGenerado, 
         descripcion: formProducto.descripcion.trim(), imagen: formProducto.imagen.trim(), createdAt: serverTimestamp() 
       });
-      showNotif(`✅ Producto añadido. SKU asignado: ${skuGenerado}`);
+      showNotif(`✅ Producto añadido. SKU: ${skuGenerado}`);
       setFormProducto({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' });
-    } catch (error) { showNotif('❌ Error al guardar producto'); }
+    } catch (error) { showNotif('❌ Error al guardar', 'error'); }
   };
 
   const handleGuardarIngreso = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db || userRole !== 'admin') return;
     const finalLoteId = formIngreso.loteSelect === '+ Nuevo Lote' ? formIngreso.loteNuevo.trim().toUpperCase() : formIngreso.loteSelect;
-    if (!finalLoteId || !formIngreso.sku) return showNotif('❌ Revisa el Lote y el SKU');
+    if (!finalLoteId || !formIngreso.sku) return showNotif('❌ Revisa el Lote y el SKU', 'error');
 
     const cFob = Number(formIngreso.costoFob || 0); const cFlete = Number(formIngreso.flete || 0); const cAduanas = Number(formIngreso.aduanas || 0); const qty = Number(formIngreso.cantidad || 1);
     const costoTotalLote = cFob + cFlete + cAduanas; const costoUnitarioReal = costoTotalLote / qty;
@@ -354,50 +328,40 @@ export default function App() {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
         loteId: finalLoteId, sku: formIngreso.sku, cantidad: formIngreso.cantidad, costoFob: formIngreso.costoFob, flete: formIngreso.flete, aduanas: formIngreso.aduanas, igv: formIngreso.igv, costoTotalLote, costoUnitarioReal, createdAt: serverTimestamp()
       });
-      showNotif('✅ Ingreso registrado con éxito');
+      showNotif('✅ Ingreso registrado');
       setFormIngreso({ loteSelect: finalLoteId, loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '' });
       setIngresoSearch('');
-    } catch (error) { showNotif('❌ Error al guardar ingreso'); }
+    } catch (error) { showNotif('❌ Error al guardar', 'error'); }
   };
 
   const handleGuardarSalida = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db || userRole !== 'admin') return;
-    if (!formSalida.sku) return showNotif('❌ Selecciona un producto a vender');
+    if (!formSalida.sku) return showNotif('❌ Selecciona un producto a vender', 'error');
     const itemStock = stockCalculado.find(s => s.sku === formSalida.sku);
-    if (!itemStock || itemStock.stockActual < Number(formSalida.cantidad)) return showNotif('❌ Stock insuficiente');
+    if (!itemStock || itemStock.stockActual < Number(formSalida.cantidad)) return showNotif('❌ Stock insuficiente', 'error');
 
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...formSalida, createdAt: serverTimestamp() });
-      showNotif('✅ Venta registrada con éxito');
+      const result = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...formSalida, createdAt: serverTimestamp() });
+      showNotif('✅ Venta registrada');
+      setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date() } }); // Muestra ticket automatico
       setFormSalida({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' });
       setSalidaSearch('');
-    } catch (error) { showNotif('❌ Error al registrar venta'); }
-  };
-
-  // LÓGICA DE BORRADO GENÉRICA
-  const handleDelete = async (coleccion, id) => {
-    if (!id) return showNotif('❌ Error: Registro inválido o ya eliminado.');
-    if (!window.confirm('¿Seguro que deseas eliminar este registro?')) return;
-    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', coleccion, id)); showNotif('✅ Registro eliminado'); } catch (error) { showNotif('❌ Error al eliminar'); }
+    } catch (error) { showNotif('❌ Error al registrar', 'error'); }
   };
 
   // CANDADO DE SEGURIDAD PARA BORRAR PRODUCTOS
   const handleDeleteProducto = (id, sku) => {
-    // Verificamos si el producto tiene ingresos o salidas asociadas
     const tieneHistorial = ingresos.some(i => i.sku === sku) || salidas.some(s => s.sku === sku);
-    
-    if (tieneHistorial) {
-      showNotif('❌ BLOQUEADO: Este producto tiene stock o historial. Elimina sus ingresos/ventas en "Historial" primero.');
-      return;
-    }
-    
-    if (!id) {
-      showNotif('❌ Este producto ya no existe en el catálogo.');
-      return;
-    }
-
+    if (tieneHistorial) { showNotif('❌ BLOQUEADO: Elimina sus ingresos/ventas en el Historial primero.', 'error'); return; }
+    if (!id) { showNotif('❌ Este producto ya no existe.', 'error'); return; }
     handleDelete('productos', id);
+  };
+
+  const handleDelete = async (coleccion, id) => {
+    if (!id) return showNotif('❌ Error: Registro inválido.', 'error');
+    if (!window.confirm('¿Seguro que deseas eliminar este registro?')) return;
+    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', coleccion, id)); showNotif('✅ Eliminado'); } catch (error) { showNotif('❌ Error al eliminar', 'error'); }
   };
 
   const handleUpdateItem = async (e) => {
@@ -410,11 +374,34 @@ export default function App() {
     }
     try {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', editingItem.type, editingItem.id), updatedData);
-      showNotif('✅ Registro actualizado'); setEditingItem(null);
-    } catch (error) { showNotif('❌ Error al actualizar'); }
+      showNotif('✅ Actualizado'); setEditingItem(null);
+    } catch (error) { showNotif('❌ Error', 'error'); }
   };
 
   const handlePrintReceipt = () => { window.print(); };
+
+  // --- LÓGICA MODO ESCÁNER POS (NUEVO) ---
+  const handleBarcodeScan = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault(); // Evita que se envíe el formulario por error
+      const scannedSKU = salidaSearch.trim().toUpperCase();
+      const foundProduct = stockCalculado.find(p => p.sku.toUpperCase() === scannedSKU);
+      
+      if (foundProduct) {
+        if (foundProduct.stockActual > 0) {
+          setFormSalida({ ...formSalida, sku: foundProduct.sku, cantidad: '1' }); // Auto-set cantidad a 1
+          setSalidaSearch(`${foundProduct.sku} - ${foundProduct.nombre}`);
+          setShowSalidaDropdown(false);
+          showNotif(`✅ Producto detectado: ${foundProduct.nombre}`);
+        } else {
+          showNotif('❌ El producto escaneado no tiene stock.', 'error');
+        }
+      } else {
+        // Si no es un SKU exacto, mostramos el dropdown para busqueda manual
+        setShowSalidaDropdown(true);
+      }
+    }
+  };
 
   if (!userRole) {
     return (
@@ -425,7 +412,7 @@ export default function App() {
             <h1 className="text-3xl font-black tracking-tighter text-slate-900">CASA SEOUL</h1>
             <p className="text-slate-500 text-sm mt-2 uppercase tracking-widest font-medium">Cloud ERP System</p>
           </div>
-          {notification && <div className="mb-6 p-4 bg-red-50 border border-red-100 text-red-600 rounded-xl text-sm font-medium text-center animate-pulse">{notification}</div>}
+          {notification.msg && <div className={`mb-6 p-4 rounded-xl text-sm font-medium text-center animate-pulse ${notification.type === 'error' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>{notification.msg}</div>}
           <form onSubmit={handleLoginSubmit} className="space-y-6">
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Correo Electrónico</label>
@@ -481,7 +468,7 @@ export default function App() {
             <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white"><X className="w-6 h-6" /></button>
           </div>
           
-          <nav className="flex-1 px-4 space-y-1.5 mt-2 overflow-y-auto">
+          <nav className="flex-1 px-4 space-y-1.5 mt-2 overflow-y-auto pb-6">
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Analítica y CRM</p>
             <button onClick={() => changeTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><PieChart className="w-5 h-5" /> Resumen Financiero</button>
             <button onClick={() => changeTab('clientes')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'clientes' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Users className="w-5 h-5" /> Directorio de Clientes</button>
@@ -493,7 +480,7 @@ export default function App() {
             
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Caja y Transacciones</p>
             <button onClick={() => changeTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingDown className="w-5 h-5" /> Registrar Ingreso</button>
-            <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta</button>
+            <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
             <button onClick={() => changeTab('reporte')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'reporte' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><BarChart3 className="w-5 h-5" /> Historial de Caja</button>
           </nav>
           
@@ -521,20 +508,60 @@ export default function App() {
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8 relative print:p-0 print:overflow-visible">
-          {notification && <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl font-bold z-50 flex items-center gap-3 animate-bounce print:hidden">{notification}</div>}
+          {notification.msg && <div className={`fixed bottom-6 right-6 md:left-1/2 md:transform md:-translate-x-1/2 px-6 py-4 rounded-2xl shadow-2xl font-bold z-50 flex items-center gap-3 animate-in slide-in-from-bottom-5 print:hidden ${notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>
+             {notification.type === 'error' ? <AlertCircle className="w-5 h-5"/> : <ShieldCheck className="w-5 h-5"/>} {notification.msg}
+          </div>}
 
           {(isKoreaView || userRole === 'invitado') ? (
             <div className="max-w-6xl mx-auto">{renderVistaCorea()}</div>
           ) : (
             <div className="max-w-6xl mx-auto space-y-6 pb-20 print:pb-0 print:space-y-0">
               
-              {/* --- RESTO DE PESTAÑAS (Dashboard, Clientes, Stock, Catálogo...) --- */}
+              {/* --- DASHBOARD Y ALERTAS --- */}
               {activeTab === 'dashboard' && (
                 <div className="space-y-6">
-                  <div className="flex items-center gap-3 mb-2">
-                    <PieChart className="text-indigo-600 w-8 h-8" />
-                    <h2 className="text-2xl font-black text-slate-900">Resumen Financiero</h2>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <PieChart className="text-indigo-600 w-8 h-8" />
+                      <h2 className="text-2xl font-black text-slate-900">Resumen Financiero</h2>
+                    </div>
                   </div>
+
+                  {/* NUEVO: PANEL DE ALERTAS OPERATIVAS */}
+                  {(alertasStock.agotados.length > 0 || alertasStock.criticos.length > 0) && (
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                      <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex items-center gap-2">
+                        <Bell className="w-5 h-5 text-amber-500" />
+                        <h3 className="font-bold text-slate-800">Centro de Alertas Operativas</h3>
+                      </div>
+                      <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {alertasStock.agotados.length > 0 && (
+                          <div className="bg-red-50 border border-red-200 p-4 rounded-xl">
+                            <div className="flex items-center gap-2 text-red-700 font-bold mb-3"><AlertCircle className="w-5 h-5" /> Stock Agotado ({alertasStock.agotados.length})</div>
+                            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+                              {alertasStock.agotados.map(p => (
+                                <div key={p.sku} className="flex justify-between items-center text-sm bg-white p-2 rounded-lg border border-red-100">
+                                  <span className="font-medium text-slate-700 truncate pr-2">{p.nombre}</span><span className="font-mono text-red-600 font-bold">{p.sku}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {alertasStock.criticos.length > 0 && (
+                          <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl">
+                            <div className="flex items-center gap-2 text-amber-700 font-bold mb-3"><AlertTriangle className="w-5 h-5" /> Nivel Crítico (≤ 5) ({alertasStock.criticos.length})</div>
+                            <div className="space-y-2 max-h-32 overflow-y-auto pr-2">
+                              {alertasStock.criticos.map(p => (
+                                <div key={p.sku} className="flex justify-between items-center text-sm bg-white p-2 rounded-lg border border-amber-100">
+                                  <span className="font-medium text-slate-700 truncate pr-2">{p.nombre}</span><span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-black text-xs">Quedan {p.stockActual}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 border-l-4 border-l-emerald-500">
@@ -560,12 +587,12 @@ export default function App() {
                     <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><Award className="w-5 h-5 text-amber-500"/> Top 5 Productos Estrella</h3>
                     <div className="space-y-4">
                       {topProductos.map((prod, index) => (
-                        <div key={prod.sku} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                        <div key={prod.sku} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100 hover:shadow-md transition-shadow">
                           <div className="flex items-center gap-4">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black ${index === 0 ? 'bg-amber-100 text-amber-600' : index === 1 ? 'bg-slate-200 text-slate-600' : index === 2 ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-400'}`}>{index + 1}</div>
-                            <div><p className="font-bold text-slate-800">{prod.nombre}</p><p className="text-xs text-slate-500 font-mono">{prod.sku} • {prod.marca}</p></div>
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black ${index === 0 ? 'bg-amber-100 text-amber-600 text-lg shadow-inner' : index === 1 ? 'bg-slate-200 text-slate-600' : index === 2 ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-400'}`}>{index + 1}</div>
+                            <div><p className="font-bold text-slate-800 text-lg">{prod.nombre}</p><p className="text-xs text-slate-500 font-mono tracking-wide">{prod.sku} • {prod.marca}</p></div>
                           </div>
-                          <div className="text-right"><p className="font-black text-emerald-600">S/ {prod.ventasGeneradas.toFixed(2)}</p><p className="text-xs font-bold text-slate-400">{prod.totalSalidas} uds vendidas</p></div>
+                          <div className="text-right"><p className="font-black text-emerald-600 text-lg">S/ {prod.ventasGeneradas.toFixed(2)}</p><p className="text-xs font-bold text-slate-400 bg-slate-200 px-2 py-1 rounded-full mt-1 inline-block">{prod.totalSalidas} uds vendidas</p></div>
                         </div>
                       ))}
                       {topProductos.length === 0 && <p className="text-slate-400 text-center py-4">No hay datos suficientes para mostrar.</p>}
@@ -602,7 +629,7 @@ export default function App() {
                     <div><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Package className="text-indigo-600 w-8 h-8" /> Inventario Maestro</h2></div>
                     <div className="flex flex-col sm:flex-row items-stretch gap-4 w-full lg:w-auto">
                       <div className="relative flex-1 sm:min-w-[250px]"><Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" /><input type="text" placeholder="Buscar producto o SKU..." className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div>
-                      <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 shrink-0"><select className="text-sm border-none bg-transparent outline-none font-bold text-slate-600 cursor-pointer pl-2" value={exportCategory} onChange={(e) => setExportCategory(e.target.value)}><option value="Todas">Todo el Inventario</option>{categoriasUnicas.map(cat => <option key={cat} value={cat}>Solo {cat}</option>)}</select><button onClick={handleExportCSV} className="ml-2 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-md transition-colors flex items-center justify-center"><Download className="w-5 h-5" /></button></div>
+                      <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 shrink-0"><select className="text-sm border-none bg-transparent outline-none font-bold text-slate-600 cursor-pointer pl-2" value={exportCategory} onChange={(e) => setExportCategory(e.target.value)}><option value="Todas">Todo el Inventario</option>{categoriasUnicas.map(cat => <option key={cat} value={cat}>Solo {cat}</option>)}</select><button onClick={handleExportCSV} className="ml-2 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-md transition-colors flex items-center justify-center" title="Descargar CSV"><Download className="w-5 h-5" /></button></div>
                     </div>
                   </div>
                   <div className="overflow-x-auto rounded-xl border border-slate-100">
@@ -614,7 +641,7 @@ export default function App() {
                             <td className="p-4 font-mono font-bold text-slate-500">{item.sku}</td>
                             <td className="p-4"><span className="font-bold text-slate-800 block">{item.nombre}</span><div className="flex gap-2 mt-1"><span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-slate-100 rounded text-slate-500">{item.marca}</span><span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-indigo-50 rounded text-indigo-500">{item.categoria}</span></div></td>
                             <td className="p-4 text-center text-blue-600 font-bold bg-blue-50/30">{item.totalIngresos}</td><td className="p-4 text-center text-orange-500 font-bold bg-orange-50/30">{item.totalSalidas}</td>
-                            <td className="p-4 text-right font-black text-xl"><span className={item.stockActual <= 5 ? 'text-red-500 bg-red-50 px-3 py-1 rounded-lg' : 'text-emerald-600'}>{item.stockActual}</span></td>
+                            <td className="p-4 text-right font-black text-xl"><span className={item.stockActual <= 5 ? 'text-red-500 bg-red-50 px-3 py-1 rounded-lg border border-red-100 shadow-sm' : 'text-emerald-600'}>{item.stockActual}</span></td>
                             <td className="p-4 text-right text-slate-600 font-bold">S/ {item.costoPromedio.toFixed(2)}</td>
                             <td className="p-4 text-center flex items-center justify-center gap-1">
                               <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors" title="Ver Detalles"><Eye className="w-5 h-5"/></button>
@@ -660,7 +687,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* === NUEVA PESTAÑA: IMPORTACIÓN MASIVA === */}
               {activeTab === 'importar' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6">
@@ -671,7 +697,6 @@ export default function App() {
                   </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                    {/* PASO 1 */}
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
                       <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">Paso 1: Descargar Plantilla</h3>
                       <p className="text-sm text-slate-500 mb-4">Para que el sistema lea tus datos correctamente, debes copiar la información de tu Excel original (Nombres, Categorías, Cantidades) y pegarla en nuestra plantilla limpia.</p>
@@ -680,7 +705,6 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* PASO 2 */}
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
                       <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">Paso 2: Subir Archivo</h3>
                       <p className="text-sm text-slate-500 mb-4">Asegúrate de que el archivo final esté guardado en formato <strong>.CSV (Delimitado por comas)</strong>. Luego, súbelo aquí para previsualizarlo.</p>
@@ -693,7 +717,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* PREVISUALIZACIÓN Y PROCESAMIENTO */}
                   {csvPreview.length > 0 && (
                     <div className="border border-indigo-100 rounded-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
                       <div className="bg-indigo-50 p-6 border-b border-indigo-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -773,36 +796,64 @@ export default function App() {
                 </div>
               )}
 
+              {/* === MODO POS (NUEVO) === */}
               {activeTab === 'salida' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
-                  <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingUp className="text-emerald-500 w-8 h-8" /> Registrar Venta</h2></div>
+                  <div className="mb-8 border-b pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingUp className="text-emerald-500 w-8 h-8" /> Terminal de Venta (POS)</h2>
+                      <p className="text-slate-500 text-sm mt-2">Deduce productos rápidamente al realizar una venta física o digital.</p>
+                    </div>
+                    <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-200 shadow-inner">
+                      <ScanLine className="w-5 h-5"/> Soporte para Lector USB Activo
+                    </div>
+                  </div>
                   <form onSubmit={handleGuardarSalida} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-6">
                       <div className="relative">
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">¿Qué se vendió?</label>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Producto o SKU (Escanea Aquí)</label>
                         <div className="relative">
-                          <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
-                          <input type="text" required={!formSalida.sku} placeholder="Buscar en el stock..." value={salidaSearch} onChange={(e) => { setSalidaSearch(e.target.value); setFormSalida({ ...formSalida, sku: '' }); setShowSalidaDropdown(true); }} onFocus={() => setShowSalidaDropdown(true)} onBlur={() => setTimeout(() => setShowSalidaDropdown(false), 200)} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-medium" />
+                          <ScanLine className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                          <input 
+                            type="text" 
+                            required={!formSalida.sku} 
+                            placeholder="Buscar nombre o escanear código de barras..." 
+                            value={salidaSearch} 
+                            ref={scannerInputRef}
+                            onChange={(e) => { 
+                              setSalidaSearch(e.target.value); 
+                              setFormSalida({ ...formSalida, sku: '' }); 
+                              setShowSalidaDropdown(true); 
+                            }} 
+                            onKeyDown={handleBarcodeScan}
+                            onFocus={() => setShowSalidaDropdown(true)} 
+                            onBlur={() => setTimeout(() => setShowSalidaDropdown(false), 200)} 
+                            className="w-full pl-10 pr-4 py-4 bg-white border-2 border-emerald-100 rounded-xl outline-none focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/20 font-medium text-lg transition-all shadow-sm" 
+                          />
                         </div>
                         {showSalidaDropdown && (
                           <div className="absolute z-20 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
-                            {productosFiltradosSalida.length > 0 ? productosFiltradosSalida.map(p => (<div key={p.sku} onMouseDown={() => { setFormSalida({ ...formSalida, sku: p.sku }); setSalidaSearch(`${p.sku} - ${p.nombre}`); setShowSalidaDropdown(false); }} className={`px-4 py-3 cursor-pointer hover:bg-emerald-50 border-b border-slate-50 ${formSalida.sku === p.sku ? 'bg-emerald-50' : ''}`}><div className="flex justify-between items-center"><div className="font-bold text-slate-800 truncate pr-2">{p.nombre}</div><div className="text-xs font-black text-emerald-600 bg-emerald-100 px-2 py-1 rounded">Stock: {p.stockActual}</div></div><div className="text-xs text-slate-500 font-mono mt-0.5">{p.sku}</div></div>)) : <div className="p-4 text-center text-slate-500">Sin stock</div>}
+                            {productosFiltradosSalida.length > 0 ? productosFiltradosSalida.map(p => (<div key={p.sku} onMouseDown={() => { setFormSalida({ ...formSalida, sku: p.sku }); setSalidaSearch(`${p.sku} - ${p.nombre}`); setShowSalidaDropdown(false); }} className={`px-4 py-3 cursor-pointer hover:bg-emerald-50 border-b border-slate-50 ${formSalida.sku === p.sku ? 'bg-emerald-50' : ''}`}><div className="flex justify-between items-center"><div className="font-bold text-slate-800 truncate pr-2">{p.nombre}</div><div className="text-xs font-black text-emerald-600 bg-emerald-100 px-2 py-1 rounded">Stock: {p.stockActual}</div></div><div className="text-xs text-slate-500 font-mono mt-0.5">{p.sku}</div></div>)) : <div className="p-4 text-center text-slate-500 font-medium">No hay stock disponible</div>}
                           </div>
                         )}
                       </div>
                       <div className="grid grid-cols-2 gap-4">
-                        <div><label className="block text-xs font-bold text-slate-500 mb-2">Unidades</label><input required type="number" min="1" value={formSalida.cantidad} onChange={e => setFormSalida({...formSalida, cantidad: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl font-black text-center text-lg text-emerald-600" /></div>
-                        <div><label className="block text-xs font-bold text-slate-500 mb-2">Cobro (S/)</label><input type="number" step="0.01" value={formSalida.precioTotal} onChange={e => setFormSalida({...formSalida, precioTotal: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-2">Unidades a Cobrar</label><input required type="number" min="1" value={formSalida.cantidad} onChange={e => setFormSalida({...formSalida, cantidad: e.target.value})} className="w-full px-4 py-4 border-2 border-slate-200 focus:border-emerald-500 rounded-xl font-black text-center text-2xl text-emerald-600 outline-none transition-colors" /></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-2">Monto Cobrado (S/)</label><input type="number" step="0.01" value={formSalida.precioTotal} onChange={e => setFormSalida({...formSalida, precioTotal: e.target.value})} className="w-full px-4 py-4 border-2 border-slate-200 focus:border-emerald-500 rounded-xl font-bold text-lg outline-none transition-colors" placeholder="0.00" /></div>
                       </div>
                     </div>
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-5">
-                      <h3 className="font-black flex items-center gap-2 text-slate-700 uppercase text-sm border-b pb-3"><ShieldCheck className="w-5 h-5 text-slate-400"/> Cliente y Recibo</h3>
+                      <h3 className="font-black flex items-center gap-2 text-slate-700 uppercase text-sm border-b pb-3"><ShieldCheck className="w-5 h-5 text-slate-400"/> Datos para el Recibo</h3>
                       <div className="grid grid-cols-2 gap-4">
-                        <div><label className="block text-xs font-bold text-slate-500 mb-2">Pago</label><select value={formSalida.metodoPago} onChange={e => setFormSalida({...formSalida, metodoPago: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl"><option value="">No esp.</option><option>Yape/Plin</option><option>Tarjeta</option><option>Efectivo</option></select></div>
-                        <div><label className="block text-xs font-bold text-slate-500 mb-2">DNI / Nombre</label><input type="text" value={formSalida.documentoCliente} onChange={e => setFormSalida({...formSalida, documentoCliente: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl" placeholder="Ej: Juan Perez" /></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-2">Método de Pago</label><select value={formSalida.metodoPago} onChange={e => setFormSalida({...formSalida, metodoPago: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:border-emerald-500"><option value="">Seleccionar...</option><option>Yape/Plin</option><option>Tarjeta POS</option><option>Efectivo</option></select></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-2">DNI / Nombre Cliente</label><input type="text" value={formSalida.documentoCliente} onChange={e => setFormSalida({...formSalida, documentoCliente: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:border-emerald-500" placeholder="Opcional" /></div>
                       </div>
                     </div>
-                    <div className="md:col-span-2 flex justify-end mt-2"><button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white px-10 py-4 rounded-xl font-black text-lg">Confirmar Salida</button></div>
+                    <div className="md:col-span-2 flex justify-end mt-4 pt-6 border-t border-slate-200">
+                      <button type="submit" className="w-full md:w-auto bg-emerald-500 hover:bg-emerald-600 text-white px-12 py-4 rounded-xl font-black text-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-200 active:scale-95 transition-all">
+                         <ShieldCheck className="w-6 h-6"/> Procesar Venta
+                      </button>
+                    </div>
                   </form>
                 </div>
               )}
@@ -812,15 +863,15 @@ export default function App() {
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><BarChart3 className="text-purple-600 w-8 h-8" /> Historial de Caja Operativa</h2></div>
                   <div className="space-y-12">
                     <div>
-                      <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500"/> Registro de Salidas</h3>
+                      <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500"/> Registro de Salidas (Ventas)</h3>
                       <div className="overflow-x-auto rounded-xl border border-slate-100">
                         <table className="min-w-full text-sm text-left whitespace-nowrap">
-                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha</th><th className="p-4">Cliente</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha / Hora</th><th className="p-4">Cliente</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
                           <tbody className="divide-y divide-slate-100">
                             {salidas.map(s => (
                               <tr key={s.id} className="hover:bg-slate-50 transition-colors">
-                                <td className="p-4 text-slate-400 text-xs font-medium">{s.createdAt?.toDate().toLocaleDateString() || 'Hoy'}</td>
-                                <td className="p-4 font-medium text-slate-600">{s.documentoCliente || '-'}</td>
+                                <td className="p-4 text-slate-400 text-xs font-medium">{s.createdAt?.toDate().toLocaleString() || 'Reciente'}</td>
+                                <td className="p-4 font-medium text-slate-600">{s.documentoCliente || 'Mostrador'}</td>
                                 <td className="p-4 font-bold text-slate-700">{s.sku}</td>
                                 <td className="p-4 text-center font-bold text-emerald-600 bg-emerald-50/50">{s.cantidad}</td>
                                 <td className="p-4 text-emerald-600 font-black">{s.precioTotal ? `S/ ${s.precioTotal}` : '-'}</td>
@@ -848,11 +899,11 @@ export default function App() {
                 <button onClick={() => setReceiptItem(null)} className="absolute top-4 right-4 text-slate-400 print:hidden"><X className="w-6 h-6" /></button>
                 <div className="text-center mb-6 border-b pb-4 border-dashed border-slate-300">
                   <h1 className="text-2xl font-black text-slate-900">CASA SEOUL</h1>
-                  <p className="text-xs text-slate-500 uppercase tracking-widest mt-1">Recibo Electrónico</p>
+                  <p className="text-xs text-slate-500 uppercase tracking-widest mt-1">Recibo de Venta</p>
                 </div>
                 <div className="space-y-2 text-sm text-slate-700 font-mono mb-6 border-b pb-4 border-dashed border-slate-300">
                   <p className="flex justify-between"><span>Fecha:</span> <span>{receiptItem.createdAt?.toDate().toLocaleDateString() || 'Hoy'}</span></p>
-                  <p className="flex justify-between"><span>Cliente:</span> <span>{receiptItem.documentoCliente || 'Público Gral.'}</span></p>
+                  <p className="flex justify-between"><span>Cliente:</span> <span>{receiptItem.documentoCliente || 'Mostrador'}</span></p>
                   <p className="flex justify-between"><span>Método:</span> <span>{receiptItem.metodoPago || 'No esp.'}</span></p>
                 </div>
                 <div className="space-y-2 text-sm font-mono mb-6">
@@ -862,7 +913,7 @@ export default function App() {
                   <span>TOTAL:</span> <span>S/ {Number(receiptItem.precioTotal || 0).toFixed(2)}</span>
                 </div>
                 <div className="mt-8 text-center print:hidden">
-                  <button onClick={handlePrintReceipt} className="w-full bg-indigo-600 text-white font-bold py-3 rounded-lg flex justify-center items-center gap-2"><Printer className="w-5 h-5"/> Imprimir Ticket</button>
+                  <button onClick={handlePrintReceipt} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl flex justify-center items-center gap-2 transition-colors"><Printer className="w-5 h-5"/> Imprimir Ticket POS</button>
                 </div>
               </div>
             </div>
@@ -876,8 +927,8 @@ export default function App() {
                 <form onSubmit={handleUpdateItem} className="space-y-5">
                   {editingItem.type !== 'productos' ? (
                     <div className="grid grid-cols-2 gap-4">
-                      <div><label className="block text-xs font-bold text-slate-500 mb-2">Cant</label><input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
-                      {editingItem.type === 'salidas' && <div><label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label><input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>}
+                      <div><label className="block text-xs font-bold text-slate-500 mb-2">Cant</label><input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
+                      {editingItem.type === 'salidas' && <div><label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label><input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>}
                     </div>
                   ) : (
                     <div className="space-y-4">
@@ -886,7 +937,7 @@ export default function App() {
                       <div><label className="block text-xs font-bold text-slate-500 mb-2">Descripción</label><textarea value={editingItem.data.descripcion || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, descripcion: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500" rows="3"></textarea></div>
                     </div>
                   )}
-                  <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl">Guardar Cambios</button>
+                  <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-xl transition-colors">Guardar Cambios</button>
                 </form>
               </div>
             </div>
