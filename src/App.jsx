@@ -28,7 +28,7 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState(null);
   
   // ROLES Y LOGIN
-  const [userRole, setUserRole] = useState(null);
+  const [userRole, setUserRole] = useState(null); // 'admin' | 'vendedor' | 'socio' | null
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   
   // UI STATES
@@ -68,15 +68,24 @@ export default function App() {
   // REFERENCIAS PARA MODO POS (ESCANER)
   const scannerInputRef = useRef(null);
 
+  // --- 1. AUTENTICACIÓN Y MOTOR DE ROLES ---
   useEffect(() => {
     if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
       if (user) {
-        if (user.email === 'socios@casaseoul.com' || user.email?.includes('invitado')) {
-          setUserRole('invitado');
+        const email = user.email?.toLowerCase() || '';
+        
+        // LÓGICA DE ROLES POR PALABRA CLAVE EN EL CORREO
+        if (email.includes('socio') || email.includes('korea') || email.includes('invitado')) {
+          setUserRole('socio');
           setIsKoreaView(true);
+        } else if (email.includes('vendedor') || email.includes('tienda')) {
+          setUserRole('vendedor');
+          setActiveTab('salida'); // El vendedor entra directo a vender
+          setIsKoreaView(false);
         } else {
+          // Asumimos que los demás (ej. admin@, josue@) son los dueños
           setUserRole('admin');
           setActiveTab('dashboard');
           setIsKoreaView(false);
@@ -133,11 +142,10 @@ export default function App() {
     });
 
     let finalStock = Object.values(stockMap);
-    if (userRole === 'invitado') finalStock = finalStock.filter(item => item.categoria !== 'Tecnología');
+    if (userRole === 'socio') finalStock = finalStock.filter(item => item.categoria !== 'Tecnología');
     return finalStock;
   }, [ingresos, salidas, userRole, productos]);
 
-  // --- CÁLCULOS DE ALERTAS (NUEVO) ---
   const alertasStock = useMemo(() => {
     const agotados = stockCalculado.filter(p => p.stockActual <= 0 && p.totalIngresos > 0);
     const criticos = stockCalculado.filter(p => p.stockActual > 0 && p.stockActual <= 5);
@@ -292,7 +300,7 @@ export default function App() {
   const handleGuardarProducto = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db) return;
-    if (userRole !== 'admin') return showNotif('❌ No tienes permisos', 'error');
+    if (userRole !== 'admin') return showNotif('❌ No tienes permisos de administrador', 'error');
 
     const finalCategoria = formProducto.categoriaSelect === '+ Nueva Categoría' ? formProducto.categoriaNueva.trim() : formProducto.categoriaSelect;
     const finalMarca = formProducto.marcaSelect === '+ Nueva Marca' ? formProducto.marcaNueva.trim() : formProducto.marcaSelect;
@@ -317,7 +325,7 @@ export default function App() {
 
   const handleGuardarIngreso = async (e) => {
     e.preventDefault();
-    if (!firebaseUser || !db || userRole !== 'admin') return;
+    if (!firebaseUser || !db || userRole !== 'admin') return showNotif('❌ Solo los admins pueden ingresar mercadería', 'error');
     const finalLoteId = formIngreso.loteSelect === '+ Nuevo Lote' ? formIngreso.loteNuevo.trim().toUpperCase() : formIngreso.loteSelect;
     if (!finalLoteId || !formIngreso.sku) return showNotif('❌ Revisa el Lote y el SKU', 'error');
 
@@ -336,22 +344,26 @@ export default function App() {
 
   const handleGuardarSalida = async (e) => {
     e.preventDefault();
-    if (!firebaseUser || !db || userRole !== 'admin') return;
+    if (!firebaseUser || !db) return;
+    // Permite que Admin y Vendedor puedan registrar ventas
+    if (userRole !== 'admin' && userRole !== 'vendedor') return showNotif('❌ No tienes permisos para vender', 'error');
+    
     if (!formSalida.sku) return showNotif('❌ Selecciona un producto a vender', 'error');
     const itemStock = stockCalculado.find(s => s.sku === formSalida.sku);
     if (!itemStock || itemStock.stockActual < Number(formSalida.cantidad)) return showNotif('❌ Stock insuficiente', 'error');
 
     try {
-      const result = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...formSalida, createdAt: serverTimestamp() });
-      showNotif('✅ Venta registrada');
+      const result = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...formSalida, vendedorEmail: firebaseUser.email, createdAt: serverTimestamp() });
+      showNotif('✅ Venta registrada exitosamente');
       setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date() } }); // Muestra ticket automatico
       setFormSalida({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' });
       setSalidaSearch('');
-    } catch (error) { showNotif('❌ Error al registrar', 'error'); }
+    } catch (error) { showNotif('❌ Error al registrar venta', 'error'); }
   };
 
   // CANDADO DE SEGURIDAD PARA BORRAR PRODUCTOS
   const handleDeleteProducto = (id, sku) => {
+    if (userRole !== 'admin') return showNotif('❌ Solo administradores pueden borrar.', 'error');
     const tieneHistorial = ingresos.some(i => i.sku === sku) || salidas.some(s => s.sku === sku);
     if (tieneHistorial) { showNotif('❌ BLOQUEADO: Elimina sus ingresos/ventas en el Historial primero.', 'error'); return; }
     if (!id) { showNotif('❌ Este producto ya no existe.', 'error'); return; }
@@ -359,14 +371,17 @@ export default function App() {
   };
 
   const handleDelete = async (coleccion, id) => {
+    if (userRole !== 'admin') return showNotif('❌ Solo administradores pueden borrar.', 'error');
     if (!id) return showNotif('❌ Error: Registro inválido.', 'error');
-    if (!window.confirm('¿Seguro que deseas eliminar este registro?')) return;
-    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', coleccion, id)); showNotif('✅ Eliminado'); } catch (error) { showNotif('❌ Error al eliminar', 'error'); }
+    if (!window.confirm('¿Seguro que deseas eliminar este registro de auditoría?')) return;
+    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', coleccion, id)); showNotif('✅ Eliminado correctamente'); } catch (error) { showNotif('❌ Error al eliminar', 'error'); }
   };
 
   const handleUpdateItem = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db || !editingItem) return;
+    if (userRole !== 'admin') return showNotif('❌ Solo administradores pueden editar.', 'error');
+    
     let updatedData = { ...editingItem.data };
     if (editingItem.type === 'ingresos') {
       const cFob = Number(updatedData.costoFob || 0); const cFlete = Number(updatedData.flete || 0); const cAduanas = Number(updatedData.aduanas || 0); const qty = Number(updatedData.cantidad || 1);
@@ -374,22 +389,22 @@ export default function App() {
     }
     try {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', editingItem.type, editingItem.id), updatedData);
-      showNotif('✅ Actualizado'); setEditingItem(null);
+      showNotif('✅ Actualizado con éxito'); setEditingItem(null);
     } catch (error) { showNotif('❌ Error', 'error'); }
   };
 
   const handlePrintReceipt = () => { window.print(); };
 
-  // --- LÓGICA MODO ESCÁNER POS (NUEVO) ---
+  // --- LÓGICA MODO ESCÁNER POS ---
   const handleBarcodeScan = (e) => {
     if (e.key === 'Enter') {
-      e.preventDefault(); // Evita que se envíe el formulario por error
+      e.preventDefault(); 
       const scannedSKU = salidaSearch.trim().toUpperCase();
       const foundProduct = stockCalculado.find(p => p.sku.toUpperCase() === scannedSKU);
       
       if (foundProduct) {
         if (foundProduct.stockActual > 0) {
-          setFormSalida({ ...formSalida, sku: foundProduct.sku, cantidad: '1' }); // Auto-set cantidad a 1
+          setFormSalida({ ...formSalida, sku: foundProduct.sku, cantidad: '1' }); 
           setSalidaSearch(`${foundProduct.sku} - ${foundProduct.nombre}`);
           setShowSalidaDropdown(false);
           showNotif(`✅ Producto detectado: ${foundProduct.nombre}`);
@@ -397,12 +412,14 @@ export default function App() {
           showNotif('❌ El producto escaneado no tiene stock.', 'error');
         }
       } else {
-        // Si no es un SKU exacto, mostramos el dropdown para busqueda manual
         setShowSalidaDropdown(true);
       }
     }
   };
 
+  // ==========================
+  // RENDER: PANTALLA LOGIN
+  // ==========================
   if (!userRole) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans">
@@ -415,8 +432,8 @@ export default function App() {
           {notification.msg && <div className={`mb-6 p-4 rounded-xl text-sm font-medium text-center animate-pulse ${notification.type === 'error' ? 'bg-red-50 text-red-600 border border-red-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>{notification.msg}</div>}
           <form onSubmit={handleLoginSubmit} className="space-y-6">
             <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Correo Electrónico</label>
-              <input type="email" required placeholder="ejemplo@casaseoul.com" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-indigo-600 focus:bg-white transition-all text-slate-800 font-medium" value={loginForm.email} onChange={e => setLoginForm({...loginForm, email: e.target.value})} />
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Correo Autorizado</label>
+              <input type="email" required placeholder="tu-correo@casaseoul.com" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-indigo-600 focus:bg-white transition-all text-slate-800 font-medium" value={loginForm.email} onChange={e => setLoginForm({...loginForm, email: e.target.value})} />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Contraseña</label>
@@ -429,6 +446,9 @@ export default function App() {
     );
   }
 
+  // ==========================
+  // RENDER: VISTA COREA (SOCIO)
+  // ==========================
   const renderVistaCorea = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b pb-6">
@@ -457,47 +477,83 @@ export default function App() {
     </div>
   );
 
+  // ==========================
+  // MAIN APP RENDER
+  // ==========================
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 overflow-hidden">
       {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
 
-      {userRole === 'admin' && !isKoreaView && (
+      {/* --- SIDEBAR PARA ADMINS Y VENDEDORES --- */}
+      {userRole !== 'socio' && !isKoreaView && (
         <aside className={`fixed md:static inset-y-0 left-0 z-50 w-72 bg-slate-900 text-white flex flex-col transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none print:hidden`}>
           <div className="p-6 md:p-8 flex justify-between items-center">
-            <div><h1 className="text-2xl font-black tracking-tighter text-white flex items-center gap-2">CASA SEOUL</h1><p className="text-xs text-indigo-400 mt-1 uppercase tracking-widest font-bold">Cloud ERP</p></div>
+            <div>
+              <h1 className="text-2xl font-black tracking-tighter text-white flex items-center gap-2">CASA SEOUL</h1>
+              <p className="text-xs text-indigo-400 mt-1 uppercase tracking-widest font-bold">
+                {userRole === 'admin' ? 'ERP Admin' : 'Terminal POS'}
+              </p>
+            </div>
             <button onClick={() => setIsSidebarOpen(false)} className="md:hidden text-slate-400 hover:text-white"><X className="w-6 h-6" /></button>
           </div>
           
           <nav className="flex-1 px-4 space-y-1.5 mt-2 overflow-y-auto pb-6">
-            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Analítica y CRM</p>
-            <button onClick={() => changeTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><PieChart className="w-5 h-5" /> Resumen Financiero</button>
-            <button onClick={() => changeTab('clientes')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'clientes' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Users className="w-5 h-5" /> Directorio de Clientes</button>
             
-            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Operativa Logística</p>
-            <button onClick={() => changeTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Package className="w-5 h-5" /> Inventario Maestro</button>
-            <button onClick={() => changeTab('catalogo')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'catalogo' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Tags className="w-5 h-5" /> Catálogo de Prod.</button>
-            <button onClick={() => changeTab('importar')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'importar' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><UploadCloud className="w-5 h-5 text-indigo-300" /> Subida Masiva Excel</button>
-            
-            <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Caja y Transacciones</p>
-            <button onClick={() => changeTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingDown className="w-5 h-5" /> Registrar Ingreso</button>
-            <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
-            <button onClick={() => changeTab('reporte')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'reporte' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><BarChart3 className="w-5 h-5" /> Historial de Caja</button>
+            {/* VISTA SOLO PARA ADMIN */}
+            {userRole === 'admin' && (
+              <>
+                <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Analítica y CRM</p>
+                <button onClick={() => changeTab('dashboard')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><PieChart className="w-5 h-5" /> Resumen Financiero</button>
+                <button onClick={() => changeTab('clientes')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'clientes' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Users className="w-5 h-5" /> Directorio de Clientes</button>
+                
+                <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Operativa Logística</p>
+                <button onClick={() => changeTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Package className="w-5 h-5" /> Inventario Maestro</button>
+                <button onClick={() => changeTab('catalogo')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'catalogo' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Tags className="w-5 h-5" /> Catálogo de Prod.</button>
+                <button onClick={() => changeTab('importar')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'importar' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><UploadCloud className="w-5 h-5 text-indigo-300" /> Subida Masiva Excel</button>
+                
+                <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Caja y Transacciones</p>
+                <button onClick={() => changeTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingDown className="w-5 h-5" /> Registrar Ingreso</button>
+                <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
+                <button onClick={() => changeTab('reporte')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'reporte' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><BarChart3 className="w-5 h-5" /> Historial de Caja</button>
+              </>
+            )}
+
+            {/* VISTA SOLO PARA VENDEDOR */}
+            {userRole === 'vendedor' && (
+              <>
+                <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Caja y Ventas</p>
+                <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
+                
+                <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Consultas</p>
+                <button onClick={() => changeTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Package className="w-5 h-5" /> Ver Stock General</button>
+              </>
+            )}
           </nav>
           
           <div className="p-6 border-t border-slate-800">
+             <div className="flex items-center gap-3 mb-4 px-2">
+               <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs uppercase">{firebaseUser?.email?.charAt(0)}</div>
+               <div className="overflow-hidden">
+                 <p className="text-xs font-bold text-slate-300 truncate">{firebaseUser?.email}</p>
+                 <p className="text-[10px] text-slate-500 uppercase tracking-wider">{userRole}</p>
+               </div>
+             </div>
              <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-800 text-sm font-medium text-slate-300 hover:bg-red-500 hover:text-white transition-colors"><LogOut className="w-4 h-4" /> Cerrar Sesión</button>
           </div>
         </aside>
       )}
 
+      {/* --- CABECERA SUPERIOR --- */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm print:hidden">
           <div className="flex items-center gap-4">
-            {userRole === 'admin' && !isKoreaView && <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 -ml-2 text-slate-600 hover:bg-slate-100 rounded-lg"><Menu className="w-6 h-6" /></button>}
-            <h2 className="font-bold text-slate-800 hidden sm:block">{userRole === 'invitado' || isKoreaView ? 'Seoul Headquarters' : 'Terminal ERP de Administración'}</h2>
+            {userRole !== 'socio' && !isKoreaView && <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 -ml-2 text-slate-600 hover:bg-slate-100 rounded-lg"><Menu className="w-6 h-6" /></button>}
+            <h2 className="font-bold text-slate-800 hidden sm:block">
+              {userRole === 'socio' || isKoreaView ? 'Seoul Headquarters' : userRole === 'admin' ? 'Terminal ERP de Administración' : 'Punto de Venta Oficial'}
+            </h2>
           </div>
           <div className="flex items-center gap-4">
-            {userRole === 'invitado' && <button onClick={handleLogout} className="text-sm font-bold text-red-600 flex items-center gap-2 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors border border-red-100"><LogOut className="w-4 h-4" /> Salir</button>}
+            {userRole === 'socio' && <button onClick={handleLogout} className="text-sm font-bold text-red-600 flex items-center gap-2 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors border border-red-100"><LogOut className="w-4 h-4" /> Cerrar Sesión</button>}
             {userRole === 'admin' && (
               <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-wide hidden sm:block">{isKoreaView ? 'Volver a Admin' : 'Simular Vista Corea'}</span>
@@ -512,13 +568,14 @@ export default function App() {
              {notification.type === 'error' ? <AlertCircle className="w-5 h-5"/> : <ShieldCheck className="w-5 h-5"/>} {notification.msg}
           </div>}
 
-          {(isKoreaView || userRole === 'invitado') ? (
+          {/* RENDER SOCIO */}
+          {(isKoreaView || userRole === 'socio') ? (
             <div className="max-w-6xl mx-auto">{renderVistaCorea()}</div>
           ) : (
             <div className="max-w-6xl mx-auto space-y-6 pb-20 print:pb-0 print:space-y-0">
               
-              {/* --- DASHBOARD Y ALERTAS --- */}
-              {activeTab === 'dashboard' && (
+              {/* --- DASHBOARD Y ALERTAS (SOLO ADMIN) --- */}
+              {activeTab === 'dashboard' && userRole === 'admin' && (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-3">
@@ -527,7 +584,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* NUEVO: PANEL DE ALERTAS OPERATIVAS */}
                   {(alertasStock.agotados.length > 0 || alertasStock.criticos.length > 0) && (
                     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                       <div className="bg-slate-50 border-b border-slate-200 px-6 py-4 flex items-center gap-2">
@@ -601,7 +657,8 @@ export default function App() {
                 </div>
               )}
 
-              {activeTab === 'clientes' && (
+              {/* --- CRM CLIENTES (SOLO ADMIN) --- */}
+              {activeTab === 'clientes' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Users className="text-indigo-600 w-8 h-8" /> Directorio de Clientes (CRM)</h2><p className="text-slate-500 text-sm mt-2">Agrupación automática de clientes basada en su DNI/Nombre.</p></div>
                   <div className="overflow-x-auto rounded-xl border border-slate-100">
@@ -623,10 +680,14 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- INVENTARIO MAESTRO (ADMIN Y VENDEDOR) --- */}
               {activeTab === 'stock' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6 border-b pb-6">
-                    <div><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Package className="text-indigo-600 w-8 h-8" /> Inventario Maestro</h2></div>
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Package className="text-indigo-600 w-8 h-8" /> Inventario Maestro</h2>
+                      {userRole === 'vendedor' && <p className="text-slate-500 text-sm mt-1">Busca stock disponible para ofrecer a los clientes.</p>}
+                    </div>
                     <div className="flex flex-col sm:flex-row items-stretch gap-4 w-full lg:w-auto">
                       <div className="relative flex-1 sm:min-w-[250px]"><Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" /><input type="text" placeholder="Buscar producto o SKU..." className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div>
                       <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 shrink-0"><select className="text-sm border-none bg-transparent outline-none font-bold text-slate-600 cursor-pointer pl-2" value={exportCategory} onChange={(e) => setExportCategory(e.target.value)}><option value="Todas">Todo el Inventario</option>{categoriasUnicas.map(cat => <option key={cat} value={cat}>Solo {cat}</option>)}</select><button onClick={handleExportCSV} className="ml-2 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-md transition-colors flex items-center justify-center" title="Descargar CSV"><Download className="w-5 h-5" /></button></div>
@@ -634,7 +695,18 @@ export default function App() {
                   </div>
                   <div className="overflow-x-auto rounded-xl border border-slate-100">
                     <table className="min-w-full text-left text-sm whitespace-nowrap">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Ingresos</th><th className="p-4 text-center">Salidas</th><th className="p-4 text-right text-indigo-600">Stock Real</th><th className="p-4 text-right">Costo Promedio</th><th className="p-4 text-center">Acciones</th></tr></thead>
+                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100">
+                        <tr>
+                          <th className="p-4">SKU</th>
+                          <th className="p-4">Producto</th>
+                          <th className="p-4 text-center">Ingresos</th>
+                          <th className="p-4 text-center">Salidas</th>
+                          <th className="p-4 text-right text-indigo-600">Stock Real</th>
+                          {/* El vendedor no ve el costo de importacion */}
+                          {userRole === 'admin' && <th className="p-4 text-right">Costo Promedio</th>}
+                          <th className="p-4 text-center">{userRole === 'admin' ? 'Acciones' : 'Ver'}</th>
+                        </tr>
+                      </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
                         {stockFiltrado.map(item => (
                           <tr key={item.sku} className="hover:bg-slate-50 transition-colors">
@@ -642,22 +714,30 @@ export default function App() {
                             <td className="p-4"><span className="font-bold text-slate-800 block">{item.nombre}</span><div className="flex gap-2 mt-1"><span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-slate-100 rounded text-slate-500">{item.marca}</span><span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-indigo-50 rounded text-indigo-500">{item.categoria}</span></div></td>
                             <td className="p-4 text-center text-blue-600 font-bold bg-blue-50/30">{item.totalIngresos}</td><td className="p-4 text-center text-orange-500 font-bold bg-orange-50/30">{item.totalSalidas}</td>
                             <td className="p-4 text-right font-black text-xl"><span className={item.stockActual <= 5 ? 'text-red-500 bg-red-50 px-3 py-1 rounded-lg border border-red-100 shadow-sm' : 'text-emerald-600'}>{item.stockActual}</span></td>
-                            <td className="p-4 text-right text-slate-600 font-bold">S/ {item.costoPromedio.toFixed(2)}</td>
+                            
+                            {userRole === 'admin' && <td className="p-4 text-right text-slate-600 font-bold">S/ {item.costoPromedio.toFixed(2)}</td>}
+                            
                             <td className="p-4 text-center flex items-center justify-center gap-1">
                               <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors" title="Ver Detalles"><Eye className="w-5 h-5"/></button>
-                              <button onClick={() => setEditingItem({ type: 'productos', id: item.id, data: item })} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar Producto"><Edit2 className="w-5 h-5"/></button>
-                              <button onClick={() => handleDeleteProducto(item.id, item.sku)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors" title="Eliminar Producto"><Trash2 className="w-5 h-5"/></button>
+                              {/* Vendedores no pueden editar ni borrar productos */}
+                              {userRole === 'admin' && (
+                                <>
+                                  <button onClick={() => setEditingItem({ type: 'productos', id: item.id, data: item })} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar Producto"><Edit2 className="w-5 h-5"/></button>
+                                  <button onClick={() => handleDeleteProducto(item.id, item.sku)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors" title="Eliminar Producto"><Trash2 className="w-5 h-5"/></button>
+                                </>
+                              )}
                             </td>
                           </tr>
                         ))}
-                        {stockFiltrado.length === 0 && <tr><td colSpan="7" className="p-12 text-center text-slate-400 font-medium">No se encontraron productos.</td></tr>}
+                        {stockFiltrado.length === 0 && <tr><td colSpan={userRole === 'admin' ? 7 : 6} className="p-12 text-center text-slate-400 font-medium">No se encontraron productos.</td></tr>}
                       </tbody>
                     </table>
                   </div>
                 </div>
               )}
 
-              {activeTab === 'catalogo' && (
+              {/* --- CATÁLOGO (SOLO ADMIN) --- */}
+              {activeTab === 'catalogo' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Tags className="text-indigo-600 w-8 h-8" /> Catálogo Maestro</h2></div>
                   <div className="mb-8 bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3 items-start text-sm text-blue-800"><Info className="w-5 h-5 shrink-0 mt-0.5 text-blue-500" /><div><strong className="block mb-1">💡 Auto-SKU Inteligente y Multimedia</strong>Agrega una descripción y pega un enlace (URL) de una foto de Google para que los socios en Corea reconozcan el producto visualmente.</div></div>
@@ -687,7 +767,8 @@ export default function App() {
                 </div>
               )}
 
-              {activeTab === 'importar' && (
+              {/* --- IMPORTAR (SOLO ADMIN) --- */}
+              {activeTab === 'importar' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6">
                     <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3">
@@ -761,7 +842,8 @@ export default function App() {
                 </div>
               )}
 
-              {activeTab === 'ingreso' && (
+              {/* --- INGRESO (SOLO ADMIN) --- */}
+              {activeTab === 'ingreso' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Ingresar Stock (Manual)</h2></div>
                   <form onSubmit={handleGuardarIngreso} className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -796,7 +878,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* === MODO POS (NUEVO) === */}
+              {/* --- SALIDA / POS (ADMIN Y VENDEDOR) --- */}
               {activeTab === 'salida' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -858,7 +940,8 @@ export default function App() {
                 </div>
               )}
 
-              {activeTab === 'reporte' && (
+              {/* --- HISTORIAL / AUDITORIA (SOLO ADMIN) --- */}
+              {activeTab === 'reporte' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><BarChart3 className="text-purple-600 w-8 h-8" /> Historial de Caja Operativa</h2></div>
                   <div className="space-y-12">
@@ -866,11 +949,12 @@ export default function App() {
                       <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500"/> Registro de Salidas (Ventas)</h3>
                       <div className="overflow-x-auto rounded-xl border border-slate-100">
                         <table className="min-w-full text-sm text-left whitespace-nowrap">
-                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha / Hora</th><th className="p-4">Cliente</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha / Hora</th><th className="p-4">Vendedor</th><th className="p-4">Cliente</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
                           <tbody className="divide-y divide-slate-100">
                             {salidas.map(s => (
                               <tr key={s.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="p-4 text-slate-400 text-xs font-medium">{s.createdAt?.toDate().toLocaleString() || 'Reciente'}</td>
+                                <td className="p-4 text-xs font-medium text-slate-500">{s.vendedorEmail || 'Admin'}</td>
                                 <td className="p-4 font-medium text-slate-600">{s.documentoCliente || 'Mostrador'}</td>
                                 <td className="p-4 font-bold text-slate-700">{s.sku}</td>
                                 <td className="p-4 text-center font-bold text-emerald-600 bg-emerald-50/50">{s.cantidad}</td>
@@ -893,6 +977,8 @@ export default function App() {
             </div>
           )}
 
+          {/* === MODALES GLOBALES === */}
+
           {receiptItem && (
             <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 print:bg-white print:static print:inset-auto print:block">
               <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-8 relative print:shadow-none print:w-full">
@@ -903,6 +989,7 @@ export default function App() {
                 </div>
                 <div className="space-y-2 text-sm text-slate-700 font-mono mb-6 border-b pb-4 border-dashed border-slate-300">
                   <p className="flex justify-between"><span>Fecha:</span> <span>{receiptItem.createdAt?.toDate().toLocaleDateString() || 'Hoy'}</span></p>
+                  <p className="flex justify-between"><span>Cajero:</span> <span className="truncate ml-4">{receiptItem.vendedorEmail || firebaseUser?.email || 'Caja'}</span></p>
                   <p className="flex justify-between"><span>Cliente:</span> <span>{receiptItem.documentoCliente || 'Mostrador'}</span></p>
                   <p className="flex justify-between"><span>Método:</span> <span>{receiptItem.metodoPago || 'No esp.'}</span></p>
                 </div>
