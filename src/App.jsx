@@ -3,7 +3,7 @@ import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, DollarSign, Award, Eye, Camera } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -54,12 +54,17 @@ export default function App() {
   
   const [editingItem, setEditingItem] = useState(null);
   const [receiptItem, setReceiptItem] = useState(null);
-  const [viewProductDetails, setViewProductDetails] = useState(null); // Nuevo estado para previsualizar productos
+  const [viewProductDetails, setViewProductDetails] = useState(null); 
   
   const [ingresoSearch, setIngresoSearch] = useState('');
   const [showIngresoDropdown, setShowIngresoDropdown] = useState(false);
   const [salidaSearch, setSalidaSearch] = useState('');
   const [showSalidaDropdown, setShowSalidaDropdown] = useState(false);
+
+  // ESTADOS PARA IMPORTACIÓN MASIVA CSV
+  const [csvPreview, setCsvPreview] = useState([]);
+  const [importLote, setImportLote] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     if (!auth) return;
@@ -183,6 +188,7 @@ export default function App() {
   const handleLogout = async () => { try { await signOut(auth); setLoginForm({ email: '', password: '' }); } catch (error) { console.error(error); } };
   const changeTab = (tab) => { setActiveTab(tab); setIsSidebarOpen(false); };
 
+  // --- LÓGICA DE EXPORTACIÓN E IMPORTACIÓN MASIVA ---
   const handleExportCSV = () => {
     let dataToExport = exportCategory !== 'Todas' ? stockCalculado.filter(i => i.categoria === exportCategory) : stockCalculado;
     const headers = ['SKU', 'Producto', 'Categoria', 'Marca', 'Ingresos', 'Salidas', 'Stock_Actual', 'Costo_Promedio_Soles'];
@@ -193,6 +199,103 @@ export default function App() {
     document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
+  const descargarPlantilla = () => {
+    const headers = ['Nombre_Producto', 'Categoria', 'Marca', 'Cantidad', 'Costo_Total_Soles'];
+    const rowEjemplo = ['Album BTS Proof', 'Álbumes', 'BTS', '10', '150.50'];
+    const csvContent = [headers.join(','), rowEjemplo.join(',')].join('\n');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
+    link.download = `Plantilla_Importacion_CasaSeoul.csv`;
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target.result;
+      // Dividir por líneas y manejar posibles comas
+      const rows = text.split('\n');
+      const parsedData = [];
+      
+      for (let i = 1; i < rows.length; i++) { // Salta los headers (i=1)
+        if (!rows[i].trim()) continue;
+        const cols = rows[i].split(','); // Asume CSV simple separado por comas
+        if (cols.length >= 5) {
+          parsedData.push({
+            nombre: cols[0].replace(/['"]/g, '').trim(),
+            categoria: cols[1].replace(/['"]/g, '').trim() || 'Importación',
+            marca: cols[2].replace(/['"]/g, '').trim() || 'Genérica',
+            cantidad: parseInt(cols[3]) || 0,
+            costoTotal: parseFloat(cols[4]) || 0
+          });
+        }
+      }
+      setCsvPreview(parsedData);
+      e.target.value = null; // Reset input
+    };
+    reader.readAsText(file);
+  };
+
+  const procesarImportacionMasiva = async () => {
+    if (!importLote.trim()) return showNotif('❌ Escribe un nombre para el Lote/Importación');
+    if (csvPreview.length === 0) return showNotif('❌ No hay datos para importar');
+    setIsImporting(true);
+
+    try {
+      let currentProducts = [...productos]; // Cache local para generar SKUs sin colisiones
+
+      for (const item of csvPreview) {
+        if (item.cantidad <= 0) continue;
+
+        // 1. Buscar si el producto ya existe en el catálogo por nombre
+        let productoExistente = currentProducts.find(p => p.nombre.toLowerCase() === item.nombre.toLowerCase());
+        let finalSku = productoExistente ? productoExistente.sku : null;
+
+        // 2. Si no existe, lo creamos dinámicamente y generamos Auto-SKU
+        if (!productoExistente) {
+          const prefixCat = item.categoria.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
+          const prefixMar = item.marca.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
+          const basePrefix = `${prefixCat}-${prefixMar}`;
+          
+          let nextNumber = currentProducts.filter(p => p.sku && p.sku.startsWith(basePrefix)).length + 1;
+          finalSku = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`;
+          
+          while (currentProducts.some(p => p.sku === finalSku)) { 
+            nextNumber++; finalSku = `${basePrefix}-${String(nextNumber).padStart(3, '0')}`; 
+          }
+
+          const nuevoProducto = {
+            nombre: item.nombre, categoria: item.categoria, marca: item.marca, sku: finalSku, createdAt: serverTimestamp()
+          };
+          
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), nuevoProducto);
+          currentProducts.push(nuevoProducto); // Lo guardamos en el cache local para la siguiente iteración
+        }
+
+        // 3. Registrar el ingreso a stock
+        const costoUnitarioReal = item.costoTotal / item.cantidad;
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
+          loteId: importLote.toUpperCase(), sku: finalSku, cantidad: item.cantidad,
+          costoFob: item.costoTotal, flete: 0, aduanas: 0, igv: 0,
+          costoTotalLote: item.costoTotal, costoUnitarioReal: costoUnitarioReal, createdAt: serverTimestamp()
+        });
+      }
+
+      showNotif('✅ Importación masiva completada con éxito');
+      setCsvPreview([]);
+      setImportLote('');
+      setActiveTab('stock');
+    } catch (error) {
+      console.error(error);
+      showNotif('❌ Hubo un error durante la importación');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  // --- ACCIONES DE GUARDADO INDIVIDUAL ---
   const handleGuardarProducto = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db) return;
@@ -211,13 +314,8 @@ export default function App() {
 
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), { 
-        nombre: formProducto.nombre.trim(), 
-        categoria: finalCategoria, 
-        marca: finalMarca, 
-        sku: skuGenerado, 
-        descripcion: formProducto.descripcion.trim(),
-        imagen: formProducto.imagen.trim(),
-        createdAt: serverTimestamp() 
+        nombre: formProducto.nombre.trim(), categoria: finalCategoria, marca: finalMarca, sku: skuGenerado, 
+        descripcion: formProducto.descripcion.trim(), imagen: formProducto.imagen.trim(), createdAt: serverTimestamp() 
       });
       showNotif(`✅ Producto añadido. SKU asignado: ${skuGenerado}`);
       setFormProducto({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' });
@@ -352,6 +450,7 @@ export default function App() {
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Operativa Logística</p>
             <button onClick={() => changeTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Package className="w-5 h-5" /> Inventario Maestro</button>
             <button onClick={() => changeTab('catalogo')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'catalogo' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Tags className="w-5 h-5" /> Catálogo de Prod.</button>
+            <button onClick={() => changeTab('importar')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'importar' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><UploadCloud className="w-5 h-5 text-indigo-300" /> Subida Masiva Excel</button>
             
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Caja y Transacciones</p>
             <button onClick={() => changeTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingDown className="w-5 h-5" /> Registrar Ingreso</button>
@@ -390,6 +489,7 @@ export default function App() {
           ) : (
             <div className="max-w-6xl mx-auto space-y-6 pb-20 print:pb-0 print:space-y-0">
               
+              {/* --- RESTO DE PESTAÑAS (Dashboard, Clientes, Stock, Catálogo...) --- */}
               {activeTab === 'dashboard' && (
                 <div className="space-y-6">
                   <div className="flex items-center gap-3 mb-2">
@@ -519,9 +619,87 @@ export default function App() {
                 </div>
               )}
 
+              {/* === NUEVA PESTAÑA: IMPORTACIÓN MASIVA === */}
+              {activeTab === 'importar' && (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
+                  <div className="mb-8 border-b pb-6">
+                    <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3">
+                      <UploadCloud className="text-indigo-600 w-8 h-8" /> Importación Masiva (Excel/CSV)
+                    </h2>
+                    <p className="text-slate-500 text-sm mt-2">Sube de golpe 50 o 100 productos de tu importación rellenando la plantilla estándar.</p>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                    {/* PASO 1 */}
+                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                      <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">Paso 1: Descargar Plantilla</h3>
+                      <p className="text-sm text-slate-500 mb-4">Para que el sistema lea tus datos correctamente, debes copiar la información de tu Excel original (Nombres, Categorías, Cantidades) y pegarla en nuestra plantilla limpia.</p>
+                      <button onClick={descargarPlantilla} className="w-full bg-white border border-slate-300 text-slate-700 hover:border-indigo-500 hover:text-indigo-600 font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all">
+                        <FileText className="w-5 h-5" /> Descargar Plantilla .CSV
+                      </button>
+                    </div>
+
+                    {/* PASO 2 */}
+                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                      <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">Paso 2: Subir Archivo</h3>
+                      <p className="text-sm text-slate-500 mb-4">Asegúrate de que el archivo final esté guardado en formato <strong>.CSV (Delimitado por comas)</strong>. Luego, súbelo aquí para previsualizarlo.</p>
+                      <div className="relative">
+                        <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                        <div className="w-full bg-white border border-dashed border-indigo-300 text-indigo-600 font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all">
+                          <UploadCloud className="w-5 h-5" /> Seleccionar archivo CSV
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* PREVISUALIZACIÓN Y PROCESAMIENTO */}
+                  {csvPreview.length > 0 && (
+                    <div className="border border-indigo-100 rounded-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-300">
+                      <div className="bg-indigo-50 p-6 border-b border-indigo-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                        <div>
+                          <h3 className="font-black text-indigo-900 text-lg">Previsualización de Datos</h3>
+                          <p className="text-sm text-indigo-600 mt-1">{csvPreview.length} productos detectados y listos para ser guardados.</p>
+                        </div>
+                        <div className="w-full md:w-1/3">
+                          <label className="block text-xs font-bold text-indigo-800 uppercase tracking-wider mb-2">ID de Lote (Obligatorio)</label>
+                          <input type="text" required value={importLote} onChange={e => setImportLote(e.target.value)} className="w-full px-4 py-3 bg-white border border-indigo-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-indigo-900 uppercase placeholder-indigo-300" placeholder="Ej: IMPORT-06" />
+                        </div>
+                      </div>
+                      
+                      <div className="max-h-64 overflow-y-auto">
+                        <table className="min-w-full text-sm text-left whitespace-nowrap">
+                          <thead className="bg-white text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-100 sticky top-0">
+                            <tr><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Marca</th><th className="p-4 text-center">Cant.</th><th className="p-4 text-right">Costo Prorrateado</th></tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 bg-slate-50/30">
+                            {csvPreview.map((item, idx) => (
+                              <tr key={idx}>
+                                <td className="p-4 font-bold text-slate-700">{item.nombre}</td><td className="p-4 text-slate-500">{item.categoria}</td><td className="p-4 text-slate-500">{item.marca}</td><td className="p-4 text-center font-black text-blue-600">{item.cantidad}</td><td className="p-4 text-right font-medium text-slate-600">S/ {item.costoTotal.toFixed(2)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="bg-white p-6 border-t border-indigo-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+                        <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                          <AlertCircle className="w-4 h-4"/> <span>El sistema auto-generará el SKU para productos nuevos.</span>
+                        </div>
+                        <div className="flex gap-3 w-full sm:w-auto">
+                          <button onClick={() => setCsvPreview([])} className="w-full sm:w-auto px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors">Cancelar</button>
+                          <button onClick={procesarImportacionMasiva} disabled={isImporting} className={`w-full sm:w-auto px-8 py-3 rounded-xl font-black text-white transition-all shadow-md ${isImporting ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700 active:scale-95'}`}>
+                            {isImporting ? 'Procesando...' : 'Confirmar y Guardar Todo'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {activeTab === 'ingreso' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
-                  <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Ingresar Stock</h2></div>
+                  <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Ingresar Stock (Manual)</h2></div>
                   <form onSubmit={handleGuardarIngreso} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-6">
                       <div>
