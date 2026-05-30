@@ -3,7 +3,7 @@ import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -215,13 +215,12 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target.result;
-      // Dividir por líneas y manejar posibles comas
       const rows = text.split('\n');
       const parsedData = [];
       
-      for (let i = 1; i < rows.length; i++) { // Salta los headers (i=1)
+      for (let i = 1; i < rows.length; i++) { 
         if (!rows[i].trim()) continue;
-        const cols = rows[i].split(','); // Asume CSV simple separado por comas
+        const cols = rows[i].split(','); 
         if (cols.length >= 5) {
           parsedData.push({
             nombre: cols[0].replace(/['"]/g, '').trim(),
@@ -233,7 +232,7 @@ export default function App() {
         }
       }
       setCsvPreview(parsedData);
-      e.target.value = null; // Reset input
+      e.target.value = null; 
     };
     reader.readAsText(file);
   };
@@ -244,16 +243,14 @@ export default function App() {
     setIsImporting(true);
 
     try {
-      let currentProducts = [...productos]; // Cache local para generar SKUs sin colisiones
+      let currentProducts = [...productos];
 
       for (const item of csvPreview) {
         if (item.cantidad <= 0) continue;
 
-        // 1. Buscar si el producto ya existe en el catálogo por nombre
         let productoExistente = currentProducts.find(p => p.nombre.toLowerCase() === item.nombre.toLowerCase());
         let finalSku = productoExistente ? productoExistente.sku : null;
 
-        // 2. Si no existe, lo creamos dinámicamente y generamos Auto-SKU
         if (!productoExistente) {
           const prefixCat = item.categoria.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
           const prefixMar = item.marca.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, 'X').padEnd(3, 'X');
@@ -271,10 +268,9 @@ export default function App() {
           };
           
           await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'productos'), nuevoProducto);
-          currentProducts.push(nuevoProducto); // Lo guardamos en el cache local para la siguiente iteración
+          currentProducts.push(nuevoProducto); 
         }
 
-        // 3. Registrar el ingreso a stock
         const costoUnitarioReal = item.costoTotal / item.cantidad;
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
           loteId: importLote.toUpperCase(), sku: finalSku, cantidad: item.cantidad,
