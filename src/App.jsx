@@ -2,10 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, Calendar } from 'lucide-react';
+import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc, setDoc } from 'firebase/firestore';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, Calendar, Settings, ToggleRight, ToggleLeft } from 'lucide-react';
 
-// --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
 try {
   const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
@@ -45,8 +44,13 @@ export default function App() {
   const [ingresos, setIngresos] = useState([]);
   const [salidas, setSalidas] = useState([]);
   const [notification, setNotification] = useState({ msg: '', type: '' });
+  
+  // NUEVO: Estado para los permisos dinámicos (Panel de Seguridad)
+  const [permisos, setPermisos] = useState({ ocultasParaSocios: ['Tecnología'] });
 
   const [formProducto, setFormProducto] = useState({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' });
+  
+  // NUEVO: Campos de fechaOperacion añadidos
   const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', fechaOperacion: getTodayString() });
   const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '', fechaOperacion: getTodayString() });
   
@@ -87,17 +91,18 @@ export default function App() {
 
   useEffect(() => {
     if (!firebaseUser || !db) return;
+    
+    // Escuchar datos principales
     const productosRef = collection(db, 'artifacts', appId, 'public', 'data', 'productos');
     const unsubProductos = onSnapshot(productosRef, (snapshot) => setProductos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
 
     const ingresosRef = collection(db, 'artifacts', appId, 'public', 'data', 'ingresos');
     const unsubIngresos = onSnapshot(ingresosRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      // Ordenar primariamente por la fecha lógica manual, luego por la de creación
       data.sort((a, b) => {
         const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
         const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
-        return dateB - dateA;
+        return dateB - dateA; // Descendente
       });
       setIngresos(data);
     });
@@ -108,12 +113,20 @@ export default function App() {
       data.sort((a, b) => {
         const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
         const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
-        return dateB - dateA;
+        return dateB - dateA; // Descendente
       });
       setSalidas(data);
     });
 
-    return () => { unsubProductos(); unsubIngresos(); unsubSalidas(); };
+    // Escuchar configuración de permisos dinámicos
+    const configRef = doc(db, 'artifacts', appId, 'public', 'config', 'permisos');
+    const unsubConfig = onSnapshot(configRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setPermisos(docSnap.data());
+      }
+    });
+
+    return () => { unsubProductos(); unsubIngresos(); unsubSalidas(); unsubConfig(); };
   }, [firebaseUser]);
 
   const stockCalculado = useMemo(() => {
@@ -139,9 +152,14 @@ export default function App() {
     });
 
     let finalStock = Object.values(stockMap);
-    if (userRole === 'socio') finalStock = finalStock.filter(item => item.categoria !== 'Tecnología');
+    
+    // APLICANDO PERMISOS DINÁMICOS AL SOCIO
+    if (userRole === 'socio') {
+      const ocultas = permisos.ocultasParaSocios || [];
+      finalStock = finalStock.filter(item => !ocultas.includes(item.categoria));
+    }
     return finalStock;
-  }, [ingresos, salidas, userRole, productos]);
+  }, [ingresos, salidas, userRole, productos, permisos]);
 
   const alertasStock = useMemo(() => {
     const agotados = stockCalculado.filter(p => p.stockActual <= 0 && p.totalIngresos > 0);
@@ -201,6 +219,26 @@ export default function App() {
   const handleLoginSubmit = async (e) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password); } catch (error) { showNotif('❌ Correo o contraseña incorrectos', 'error'); } };
   const handleLogout = async () => { try { await signOut(auth); setLoginForm({ email: '', password: '' }); } catch (error) { console.error(error); } };
   const changeTab = (tab) => { setActiveTab(tab); setIsSidebarOpen(false); };
+
+  const handleTogglePermisoSocio = async (categoria) => {
+    if (userRole !== 'admin') return;
+    const ocultasActuales = permisos.ocultasParaSocios || [];
+    const estaOculta = ocultasActuales.includes(categoria);
+    
+    let nuevasOcultas;
+    if (estaOculta) {
+      nuevasOcultas = ocultasActuales.filter(c => c !== categoria); // La hacemos visible
+    } else {
+      nuevasOcultas = [...ocultasActuales, categoria]; // La ocultamos
+    }
+    
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'config', 'permisos'), { ocultasParaSocios: nuevasOcultas }, { merge: true });
+      showNotif(`✅ Visibilidad de "${categoria}" actualizada`);
+    } catch (error) {
+      showNotif('❌ Error al actualizar permisos', 'error');
+    }
+  };
 
   const handleExportCSV = () => {
     let dataToExport = exportCategory !== 'Todas' ? stockCalculado.filter(i => i.categoria === exportCategory) : stockCalculado;
@@ -355,7 +393,7 @@ export default function App() {
     try {
       const result = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...formSalida, vendedorEmail: firebaseUser.email, createdAt: serverTimestamp() });
       showNotif('✅ Venta registrada exitosamente');
-      setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date(formSalida.fechaOperacion) } });
+      setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date(formSalida.fechaOperacion) } }); // Muestra ticket automatico simulando fecha
       setFormSalida(prev => ({ ...prev, sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' }));
       setSalidaSearch('');
     } catch (error) { showNotif('❌ Error al registrar venta', 'error'); }
@@ -445,7 +483,13 @@ export default function App() {
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b pb-6">
         <div><h2 className="text-3xl font-black text-slate-900 tracking-tight">Korea Dashboard</h2><p className="text-slate-500 mt-1">Live Inventory Status - Seoul HQ</p></div>
-        <div className="p-3 bg-blue-50 rounded-xl"><Globe2 className="w-8 h-8 text-blue-500" /></div>
+        <div className="flex items-center gap-4">
+          <div className="text-right hidden sm:block">
+            <p className="text-xs font-bold text-slate-400 uppercase">Visible SKUs</p>
+            <p className="text-xl font-black text-indigo-600">{stockFiltrado.length}</p>
+          </div>
+          <div className="p-3 bg-blue-50 rounded-xl"><Globe2 className="w-8 h-8 text-blue-500" /></div>
+        </div>
       </div>
       <div className="overflow-x-auto rounded-xl border border-slate-100">
         <table className="min-w-full text-left border-collapse">
@@ -463,6 +507,7 @@ export default function App() {
                 </td>
               </tr>
             ))}
+            {stockFiltrado.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-slate-400 font-medium">No records found. Contact Administrator.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -473,7 +518,7 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 overflow-hidden">
       {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
 
-      {/* --- SIDEBAR --- */}
+      {/* --- SIDEBAR PARA ADMINS Y VENDEDORES --- */}
       {userRole !== 'socio' && !isKoreaView && (
         <aside className={`fixed md:static inset-y-0 left-0 z-50 w-72 bg-slate-900 text-white flex flex-col transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none print:hidden`}>
           <div className="p-6 md:p-8 flex justify-between items-center">
@@ -487,6 +532,7 @@ export default function App() {
           </div>
           
           <nav className="flex-1 px-4 space-y-1.5 mt-2 overflow-y-auto pb-6">
+            
             {userRole === 'admin' && (
               <>
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Analítica y CRM</p>
@@ -502,6 +548,10 @@ export default function App() {
                 <button onClick={() => changeTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingDown className="w-5 h-5" /> Registrar Ingreso</button>
                 <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
                 <button onClick={() => changeTab('reporte')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'reporte' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><BarChart3 className="w-5 h-5" /> Historial de Caja</button>
+
+                {/* NUEVO: PANEL DE SEGURIDAD */}
+                <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Administración</p>
+                <button onClick={() => changeTab('seguridad')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'seguridad' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Settings className="w-5 h-5" /> Seguridad y Accesos</button>
               </>
             )}
 
@@ -509,6 +559,7 @@ export default function App() {
               <>
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Caja y Ventas</p>
                 <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
+                
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Consultas</p>
                 <button onClick={() => changeTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Package className="w-5 h-5" /> Ver Stock General</button>
               </>
@@ -528,7 +579,7 @@ export default function App() {
         </aside>
       )}
 
-      {/* --- CABECERA --- */}
+      {/* --- CABECERA SUPERIOR --- */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm print:hidden">
           <div className="flex items-center gap-4">
@@ -871,6 +922,23 @@ export default function App() {
               {/* --- SALIDA / POS --- */}
               {activeTab === 'salida' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
+                  
+                  {/* WIDGET DEL VENDEDOR (NUEVO) */}
+                  {userRole === 'vendedor' && (
+                    <div className="mb-8 flex bg-emerald-50 border border-emerald-100 rounded-2xl p-4 md:p-6 justify-between items-center shadow-inner">
+                      <div>
+                        <h3 className="text-emerald-800 font-black flex items-center gap-2"><TrendingUp className="w-5 h-5"/> Tu Resumen de Hoy</h3>
+                        <p className="text-emerald-600 text-sm mt-1">Sigue así, registra tus ventas con precisión.</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-xs font-bold text-emerald-500 uppercase tracking-widest">Total Cobrado</p>
+                        <p className="text-2xl font-black text-emerald-700">
+                          S/ {salidas.filter(s => s.vendedorEmail === firebaseUser.email && (s.fechaOperacion === getTodayString() || (!s.fechaOperacion && s.createdAt?.toDate().toISOString().split('T')[0] === getTodayString()))).reduce((acc, curr) => acc + Number(curr.precioTotal || 0), 0).toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mb-8 border-b pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
                       <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingUp className="text-emerald-500 w-8 h-8" /> Terminal de Venta (POS)</h2>
@@ -1000,6 +1068,44 @@ export default function App() {
                 </div>
               )}
 
+              {/* === NUEVO PANEL DE SEGURIDAD PARA ADMIN === */}
+              {activeTab === 'seguridad' && userRole === 'admin' && (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
+                  <div className="mb-8 border-b pb-6">
+                    <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3">
+                      <Settings className="text-indigo-600 w-8 h-8" /> Panel de Seguridad y Accesos
+                    </h2>
+                    <p className="text-slate-500 text-sm mt-2">Administra qué categorías de productos pueden ver los socios internacionales (Korea Dashboard). Los cambios se aplican en tiempo real.</p>
+                  </div>
+                  
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                    <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center gap-2"><Globe2 className="w-5 h-5 text-blue-500"/> Visibilidad para Socios (Corea)</h3>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {categoriasUnicas.map(cat => {
+                        const estaOculta = (permisos.ocultasParaSocios || []).includes(cat);
+                        return (
+                          <div key={cat} className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${estaOculta ? 'bg-white border-slate-200' : 'bg-indigo-50 border-indigo-200'}`}>
+                            <span className={`font-bold ${estaOculta ? 'text-slate-500' : 'text-indigo-900'}`}>{cat}</span>
+                            <button 
+                              onClick={() => handleTogglePermisoSocio(cat)}
+                              className="focus:outline-none"
+                            >
+                              {estaOculta ? (
+                                <ToggleLeft className="w-8 h-8 text-slate-400" />
+                              ) : (
+                                <ToggleRight className="w-8 h-8 text-indigo-600" />
+                              )}
+                            </button>
+                          </div>
+                        )
+                      })}
+                      {categoriasUnicas.length === 0 && <p className="text-slate-400 text-sm">Crea productos en tu catálogo para gestionar sus permisos.</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
             </div>
           )}
 
@@ -1042,7 +1148,10 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4">
                       <div><label className="block text-xs font-bold text-slate-500 mb-2">Cant</label><input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
                       {editingItem.type === 'salidas' && <div><label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label><input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>}
-                      <div className="col-span-2"><label className="block text-xs font-bold text-slate-500 mb-2">Fecha Lógica (Operación)</label><input type="date" value={editingItem.data.fechaOperacion || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, fechaOperacion: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-600" /></div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 mb-2">Fecha Lógica (Operación)</label>
+                        <input type="date" value={editingItem.data.fechaOperacion || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, fechaOperacion: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-600" />
+                      </div>
                     </div>
                   ) : (
                     <div className="space-y-4">
