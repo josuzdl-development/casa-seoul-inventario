@@ -264,9 +264,23 @@ export default function App() {
       const text = event.target.result;
       const rows = text.split(/\r?\n/);
       const parsedData = [];
-      const firstLine = rows[0] || '';
-      const delimiter = firstLine.includes(';') ? ';' : (firstLine.includes('\t') ? '\t' : ',');
       
+      // Súper Inteligencia 2.0: Buscar el delimitador más común en las primeras 5 líneas de datos (ignorando el header)
+      let comaCount = 0;
+      let puntoComaCount = 0;
+      let tabCount = 0;
+      
+      const linesToCheck = Math.min(rows.length, 6); // Chequear hasta 5 líneas de datos
+      for(let i=1; i < linesToCheck; i++){
+          comaCount += (rows[i].match(/,/g) || []).length;
+          puntoComaCount += (rows[i].match(/;/g) || []).length;
+          tabCount += (rows[i].match(/\t/g) || []).length;
+      }
+
+      let delimiter = ','; // Por defecto
+      if (puntoComaCount > comaCount && puntoComaCount > tabCount) delimiter = ';';
+      else if (tabCount > comaCount && tabCount > puntoComaCount) delimiter = '\t';
+
       for (let i = 1; i < rows.length; i++) { 
         if (!rows[i].trim()) continue;
         const regex = new RegExp(`(?:^|\\${delimiter})(\\"(?:[^\"]+|\"\")*\\"|[^\\${delimiter}]*)`, 'g');
