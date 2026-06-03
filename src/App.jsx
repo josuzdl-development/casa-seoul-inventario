@@ -3,7 +3,7 @@ import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, Calendar } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -24,32 +24,31 @@ try {
   console.error("Error inicializando Firebase", error);
 }
 
+// Helper para obtener fecha de hoy en formato YYYY-MM-DD local
+const getTodayString = () => {
+  const tzoffset = (new Date()).getTimezoneOffset() * 60000; // offset in milliseconds
+  return (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
+};
+
 export default function App() {
   const [firebaseUser, setFirebaseUser] = useState(null);
-  
-  // ROLES Y LOGIN
-  const [userRole, setUserRole] = useState(null); // 'admin' | 'vendedor' | 'socio' | null
+  const [userRole, setUserRole] = useState(null);
   const [loginForm, setLoginForm] = useState({ email: '', password: '' });
   
-  // UI STATES
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isKoreaView, setIsKoreaView] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [exportCategory, setExportCategory] = useState('Todas');
   
-  // DATA STATES
   const [productos, setProductos] = useState([]);
   const [ingresos, setIngresos] = useState([]);
   const [salidas, setSalidas] = useState([]);
   const [notification, setNotification] = useState({ msg: '', type: '' });
 
-  // FORM STATES Y BUSCADORES
-  const [formProducto, setFormProducto] = useState({ 
-    nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' 
-  });
-  const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '' });
-  const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' });
+  const [formProducto, setFormProducto] = useState({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' });
+  const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', fechaOperacion: getTodayString() });
+  const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '', fechaOperacion: getTodayString() });
   
   const [editingItem, setEditingItem] = useState(null);
   const [receiptItem, setReceiptItem] = useState(null);
@@ -60,35 +59,24 @@ export default function App() {
   const [salidaSearch, setSalidaSearch] = useState('');
   const [showSalidaDropdown, setShowSalidaDropdown] = useState(false);
 
-  // ESTADOS PARA IMPORTACIÓN MASIVA CSV
   const [csvPreview, setCsvPreview] = useState([]);
   const [importLote, setImportLote] = useState('');
   const [isImporting, setIsImporting] = useState(false);
 
-  // REFERENCIAS PARA MODO POS (ESCANER)
   const scannerInputRef = useRef(null);
 
-  // --- 1. AUTENTICACIÓN Y MOTOR DE ROLES ---
   useEffect(() => {
     if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
       if (user) {
         const email = user.email?.toLowerCase() || '';
-        
-        // LÓGICA DE ROLES POR PALABRA CLAVE EN EL CORREO
         if (email.includes('socio') || email.includes('korea') || email.includes('invitado')) {
-          setUserRole('socio');
-          setIsKoreaView(true);
+          setUserRole('socio'); setIsKoreaView(true);
         } else if (email.includes('vendedor') || email.includes('tienda')) {
-          setUserRole('vendedor');
-          setActiveTab('salida'); // El vendedor entra directo a vender
-          setIsKoreaView(false);
+          setUserRole('vendedor'); setActiveTab('salida'); setIsKoreaView(false);
         } else {
-          // Asumimos que los demás (ej. admin@, josue@) son los dueños
-          setUserRole('admin');
-          setActiveTab('dashboard');
-          setIsKoreaView(false);
+          setUserRole('admin'); setActiveTab('dashboard'); setIsKoreaView(false);
         }
       } else {
         setUserRole(null);
@@ -105,14 +93,23 @@ export default function App() {
     const ingresosRef = collection(db, 'artifacts', appId, 'public', 'data', 'ingresos');
     const unsubIngresos = onSnapshot(ingresosRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      data.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
+      // Ordenar primariamente por la fecha lógica manual, luego por la de creación
+      data.sort((a, b) => {
+        const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
+        const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
+        return dateB - dateA;
+      });
       setIngresos(data);
     });
 
     const salidasRef = collection(db, 'artifacts', appId, 'public', 'data', 'salidas');
     const unsubSalidas = onSnapshot(salidasRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      data.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
+      data.sort((a, b) => {
+        const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
+        const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
+        return dateB - dateA;
+      });
       setSalidas(data);
     });
 
@@ -205,7 +202,6 @@ export default function App() {
   const handleLogout = async () => { try { await signOut(auth); setLoginForm({ email: '', password: '' }); } catch (error) { console.error(error); } };
   const changeTab = (tab) => { setActiveTab(tab); setIsSidebarOpen(false); };
 
-  // --- LÓGICA DE EXPORTACIÓN E IMPORTACIÓN MASIVA ---
   const handleExportCSV = () => {
     let dataToExport = exportCategory !== 'Todas' ? stockCalculado.filter(i => i.categoria === exportCategory) : stockCalculado;
     const headers = ['SKU', 'Producto', 'Categoria', 'Marca', 'Ingresos', 'Salidas', 'Stock_Actual', 'Costo_Promedio_Soles'];
@@ -217,8 +213,8 @@ export default function App() {
   };
 
   const descargarPlantilla = () => {
-    const headers = ['Nombre_Producto', 'Categoria', 'Marca', 'Cantidad', 'Costo_Unitario_Soles'];
-    const rowEjemplo = ['Album BTS Proof', 'Álbumes', 'BTS', '10', '15.50'];
+    const headers = ['Nombre_Producto', 'Categoria', 'Marca', 'Cantidad', 'Costo_Unitario_Soles', 'Fecha_Operacion'];
+    const rowEjemplo = ['Album BTS Proof', 'Álbumes', 'BTS', '10', '15.50', '2024-05-20'];
     const csvContent = [headers.join(','), rowEjemplo.join(',')].join('\n');
     const link = document.createElement('a');
     link.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
@@ -249,7 +245,7 @@ export default function App() {
         if (cols.length >= 1 && cols[0]) {
           parsedData.push({
             nombre: cols[0] || 'Sin Nombre', categoria: cols[1] || 'Importación', marca: cols[2] || 'Genérica',
-            cantidad: parseInt(cols[3]) || 0, costoUnitario: parseFloat(cols[4]) || 0
+            cantidad: parseInt(cols[3]) || 0, costoUnitario: parseFloat(cols[4]) || 0, fechaOperacion: cols[5] || getTodayString()
           });
         }
       }
@@ -285,10 +281,15 @@ export default function App() {
         }
 
         const costoTotalLote = item.costoUnitario * item.cantidad;
+        // Normaliza fecha a YYYY-MM-DD
+        let fechaLimpia = item.fechaOperacion.trim();
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!dateRegex.test(fechaLimpia)) fechaLimpia = getTodayString();
+
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
           loteId: importLote.toUpperCase(), sku: finalSku, cantidad: item.cantidad,
           costoFob: costoTotalLote, flete: 0, aduanas: 0, igv: 0,
-          costoTotalLote: costoTotalLote, costoUnitarioReal: item.costoUnitario, createdAt: serverTimestamp()
+          costoTotalLote: costoTotalLote, costoUnitarioReal: item.costoUnitario, fechaOperacion: fechaLimpia, createdAt: serverTimestamp()
         });
       }
       showNotif('✅ Importación completada');
@@ -296,7 +297,6 @@ export default function App() {
     } catch (error) { showNotif('❌ Error en importación', 'error'); } finally { setIsImporting(false); }
   };
 
-  // --- ACCIONES DE GUARDADO INDIVIDUAL ---
   const handleGuardarProducto = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db) return;
@@ -334,10 +334,11 @@ export default function App() {
 
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
-        loteId: finalLoteId, sku: formIngreso.sku, cantidad: formIngreso.cantidad, costoFob: formIngreso.costoFob, flete: formIngreso.flete, aduanas: formIngreso.aduanas, igv: formIngreso.igv, costoTotalLote, costoUnitarioReal, createdAt: serverTimestamp()
+        loteId: finalLoteId, sku: formIngreso.sku, cantidad: formIngreso.cantidad, costoFob: formIngreso.costoFob, flete: formIngreso.flete, aduanas: formIngreso.aduanas, igv: formIngreso.igv, costoTotalLote, costoUnitarioReal, fechaOperacion: formIngreso.fechaOperacion, createdAt: serverTimestamp()
       });
       showNotif('✅ Ingreso registrado');
-      setFormIngreso({ loteSelect: finalLoteId, loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '' });
+      // Mantiene el lote pero resetea el resto. Mantiene la fecha elegida para facilitar ingreso multiple del mismo dia
+      setFormIngreso(prev => ({ ...prev, sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', loteSelect: finalLoteId, loteNuevo: '' }));
       setIngresoSearch('');
     } catch (error) { showNotif('❌ Error al guardar', 'error'); }
   };
@@ -345,7 +346,6 @@ export default function App() {
   const handleGuardarSalida = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db) return;
-    // Permite que Admin y Vendedor puedan registrar ventas
     if (userRole !== 'admin' && userRole !== 'vendedor') return showNotif('❌ No tienes permisos para vender', 'error');
     
     if (!formSalida.sku) return showNotif('❌ Selecciona un producto a vender', 'error');
@@ -355,13 +355,12 @@ export default function App() {
     try {
       const result = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...formSalida, vendedorEmail: firebaseUser.email, createdAt: serverTimestamp() });
       showNotif('✅ Venta registrada exitosamente');
-      setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date() } }); // Muestra ticket automatico
-      setFormSalida({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' });
+      setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date(formSalida.fechaOperacion) } });
+      setFormSalida(prev => ({ ...prev, sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' }));
       setSalidaSearch('');
     } catch (error) { showNotif('❌ Error al registrar venta', 'error'); }
   };
 
-  // CANDADO DE SEGURIDAD PARA BORRAR PRODUCTOS
   const handleDeleteProducto = (id, sku) => {
     if (userRole !== 'admin') return showNotif('❌ Solo administradores pueden borrar.', 'error');
     const tieneHistorial = ingresos.some(i => i.sku === sku) || salidas.some(s => s.sku === sku);
@@ -395,7 +394,6 @@ export default function App() {
 
   const handlePrintReceipt = () => { window.print(); };
 
-  // --- LÓGICA MODO ESCÁNER POS ---
   const handleBarcodeScan = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault(); 
@@ -417,9 +415,6 @@ export default function App() {
     }
   };
 
-  // ==========================
-  // RENDER: PANTALLA LOGIN
-  // ==========================
   if (!userRole) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans">
@@ -446,9 +441,6 @@ export default function App() {
     );
   }
 
-  // ==========================
-  // RENDER: VISTA COREA (SOCIO)
-  // ==========================
   const renderVistaCorea = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b pb-6">
@@ -477,14 +469,11 @@ export default function App() {
     </div>
   );
 
-  // ==========================
-  // MAIN APP RENDER
-  // ==========================
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 overflow-hidden">
       {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
 
-      {/* --- SIDEBAR PARA ADMINS Y VENDEDORES --- */}
+      {/* --- SIDEBAR --- */}
       {userRole !== 'socio' && !isKoreaView && (
         <aside className={`fixed md:static inset-y-0 left-0 z-50 w-72 bg-slate-900 text-white flex flex-col transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none print:hidden`}>
           <div className="p-6 md:p-8 flex justify-between items-center">
@@ -498,8 +487,6 @@ export default function App() {
           </div>
           
           <nav className="flex-1 px-4 space-y-1.5 mt-2 overflow-y-auto pb-6">
-            
-            {/* VISTA SOLO PARA ADMIN */}
             {userRole === 'admin' && (
               <>
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Analítica y CRM</p>
@@ -518,12 +505,10 @@ export default function App() {
               </>
             )}
 
-            {/* VISTA SOLO PARA VENDEDOR */}
             {userRole === 'vendedor' && (
               <>
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Caja y Ventas</p>
                 <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
-                
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Consultas</p>
                 <button onClick={() => changeTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Package className="w-5 h-5" /> Ver Stock General</button>
               </>
@@ -543,7 +528,7 @@ export default function App() {
         </aside>
       )}
 
-      {/* --- CABECERA SUPERIOR --- */}
+      {/* --- CABECERA --- */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm print:hidden">
           <div className="flex items-center gap-4">
@@ -680,7 +665,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- INVENTARIO MAESTRO (ADMIN Y VENDEDOR) --- */}
+              {/* --- INVENTARIO MAESTRO --- */}
               {activeTab === 'stock' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6 border-b pb-6">
@@ -702,7 +687,6 @@ export default function App() {
                           <th className="p-4 text-center">Ingresos</th>
                           <th className="p-4 text-center">Salidas</th>
                           <th className="p-4 text-right text-indigo-600">Stock Real</th>
-                          {/* El vendedor no ve el costo de importacion */}
                           {userRole === 'admin' && <th className="p-4 text-right">Costo Promedio</th>}
                           <th className="p-4 text-center">{userRole === 'admin' ? 'Acciones' : 'Ver'}</th>
                         </tr>
@@ -719,7 +703,6 @@ export default function App() {
                             
                             <td className="p-4 text-center flex items-center justify-center gap-1">
                               <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors" title="Ver Detalles"><Eye className="w-5 h-5"/></button>
-                              {/* Vendedores no pueden editar ni borrar productos */}
                               {userRole === 'admin' && (
                                 <>
                                   <button onClick={() => setEditingItem({ type: 'productos', id: item.id, data: item })} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar Producto"><Edit2 className="w-5 h-5"/></button>
@@ -736,7 +719,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- CATÁLOGO (SOLO ADMIN) --- */}
+              {/* --- CATÁLOGO --- */}
               {activeTab === 'catalogo' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Tags className="text-indigo-600 w-8 h-8" /> Catálogo Maestro</h2></div>
@@ -767,7 +750,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- IMPORTAR (SOLO ADMIN) --- */}
+              {/* --- IMPORTACIÓN MASIVA --- */}
               {activeTab === 'importar' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6">
@@ -780,7 +763,7 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
                       <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">Paso 1: Descargar Plantilla</h3>
-                      <p className="text-sm text-slate-500 mb-4">Para que el sistema lea tus datos correctamente, debes copiar la información de tu Excel original (Nombres, Categorías, Cantidades) y pegarla en nuestra plantilla limpia.</p>
+                      <p className="text-sm text-slate-500 mb-4">La plantilla incluye ahora la columna <strong>Fecha_Operacion</strong> para que subas datos de meses pasados.</p>
                       <button onClick={descargarPlantilla} className="w-full bg-white border border-slate-300 text-slate-700 hover:border-indigo-500 hover:text-indigo-600 font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all">
                         <FileText className="w-5 h-5" /> Descargar Plantilla .CSV
                       </button>
@@ -788,7 +771,7 @@ export default function App() {
 
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
                       <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">Paso 2: Subir Archivo</h3>
-                      <p className="text-sm text-slate-500 mb-4">Asegúrate de que el archivo final esté guardado en formato <strong>.CSV (Delimitado por comas)</strong>. Luego, súbelo aquí para previsualizarlo.</p>
+                      <p className="text-sm text-slate-500 mb-4">Sube aquí tu archivo modificado en formato <strong>.CSV</strong>.</p>
                       <div className="relative">
                         <input type="file" accept=".csv" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                         <div className="w-full bg-white border border-dashed border-indigo-300 text-indigo-600 font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all">
@@ -803,7 +786,7 @@ export default function App() {
                       <div className="bg-indigo-50 p-6 border-b border-indigo-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                         <div>
                           <h3 className="font-black text-indigo-900 text-lg">Previsualización de Datos</h3>
-                          <p className="text-sm text-indigo-600 mt-1">{csvPreview.length} productos detectados y listos para ser guardados.</p>
+                          <p className="text-sm text-indigo-600 mt-1">{csvPreview.length} productos listos para ser guardados.</p>
                         </div>
                         <div className="w-full md:w-1/3">
                           <label className="block text-xs font-bold text-indigo-800 uppercase tracking-wider mb-2">ID de Lote (Obligatorio)</label>
@@ -814,12 +797,12 @@ export default function App() {
                       <div className="max-h-64 overflow-y-auto">
                         <table className="min-w-full text-sm text-left whitespace-nowrap">
                           <thead className="bg-white text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-100 sticky top-0">
-                            <tr><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Marca</th><th className="p-4 text-center">Cant.</th><th className="p-4 text-right">Costo Unitario</th><th className="p-4 text-right">Costo Total</th></tr>
+                            <tr><th className="p-4">Fecha Op.</th><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Marca</th><th className="p-4 text-center">Cant.</th><th className="p-4 text-right">Costo Unitario</th></tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-slate-50/30">
                             {csvPreview.map((item, idx) => (
                               <tr key={idx}>
-                                <td className="p-4 font-bold text-slate-700">{item.nombre}</td><td className="p-4 text-slate-500">{item.categoria}</td><td className="p-4 text-slate-500">{item.marca}</td><td className="p-4 text-center font-black text-blue-600">{item.cantidad}</td><td className="p-4 text-right font-medium text-slate-600">S/ {item.costoUnitario.toFixed(2)}</td><td className="p-4 text-right font-black text-indigo-600">S/ {(item.costoUnitario * item.cantidad).toFixed(2)}</td>
+                                <td className="p-4 font-mono text-slate-500">{item.fechaOperacion}</td><td className="p-4 font-bold text-slate-700">{item.nombre}</td><td className="p-4 text-slate-500">{item.categoria}</td><td className="p-4 text-slate-500">{item.marca}</td><td className="p-4 text-center font-black text-blue-600">{item.cantidad}</td><td className="p-4 text-right font-medium text-slate-600">S/ {item.costoUnitario.toFixed(2)}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -828,7 +811,7 @@ export default function App() {
 
                       <div className="bg-white p-6 border-t border-indigo-100 flex flex-col sm:flex-row justify-between items-center gap-4">
                         <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 p-2 rounded-lg border border-amber-200">
-                          <AlertCircle className="w-4 h-4"/> <span>El sistema auto-generará el SKU para productos nuevos.</span>
+                          <AlertCircle className="w-4 h-4"/> <span>Se generarán SKUs y se insertarán con la fecha de operación indicada.</span>
                         </div>
                         <div className="flex gap-3 w-full sm:w-auto">
                           <button onClick={() => setCsvPreview([])} className="w-full sm:w-auto px-6 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors">Cancelar</button>
@@ -842,17 +825,24 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- INGRESO (SOLO ADMIN) --- */}
+              {/* --- INGRESO MANUAL --- */}
               {activeTab === 'ingreso' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Ingresar Stock (Manual)</h2></div>
                   <form onSubmit={handleGuardarIngreso} className="grid grid-cols-1 md:grid-cols-2 gap-8">
                     <div className="space-y-6">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Lote / Importación</label>
-                        <select required value={formIngreso.loteSelect} onChange={e => setFormIngreso({...formIngreso, loteSelect: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"><option value="">Selecciona...</option>{lotesUnicos.map(l => <option key={l} value={l}>{l}</option>)}<option value="+ Nuevo Lote" className="font-bold text-blue-600">+ Crear nuevo lote...</option></select>
-                        {formIngreso.loteSelect === '+ Nuevo Lote' && <input required autoFocus value={formIngreso.loteNuevo} onChange={e => setFormIngreso({...formIngreso, loteNuevo: e.target.value})} className="w-full mt-3 px-4 py-3 border-2 border-blue-200 rounded-xl uppercase" placeholder="Ej: IMP-COREA-05" />}
+                      <div className="grid grid-cols-3 gap-4">
+                        <div className="col-span-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Lote / Importación</label>
+                          <select required value={formIngreso.loteSelect} onChange={e => setFormIngreso({...formIngreso, loteSelect: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"><option value="">Selecciona...</option>{lotesUnicos.map(l => <option key={l} value={l}>{l}</option>)}<option value="+ Nuevo Lote" className="font-bold text-blue-600">+ Crear nuevo lote...</option></select>
+                          {formIngreso.loteSelect === '+ Nuevo Lote' && <input required autoFocus value={formIngreso.loteNuevo} onChange={e => setFormIngreso({...formIngreso, loteNuevo: e.target.value})} className="w-full mt-3 px-4 py-3 border-2 border-blue-200 rounded-xl uppercase" placeholder="Ej: IMP-COREA-05" />}
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Fecha</label>
+                          <input type="date" required value={formIngreso.fechaOperacion} onChange={e => setFormIngreso({...formIngreso, fechaOperacion: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-600" />
+                        </div>
                       </div>
+                      
                       <div className="grid grid-cols-3 gap-4">
                         <div className="col-span-2 relative">
                           <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Producto</label>
@@ -871,14 +861,14 @@ export default function App() {
                     </div>
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-5">
                       <h3 className="font-black flex items-center gap-2 text-slate-700 uppercase text-sm border-b pb-3"><Calculator className="w-5 h-5 text-slate-400"/> Costos (S/) <span className="font-normal text-xs text-slate-400 ml-auto">Opcional</span></h3>
-                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">FOB Total</label><input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
+                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">FOB Total del Lote</label><input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
                     </div>
                     <div className="md:col-span-2 flex justify-end mt-2"><button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-10 py-4 rounded-xl font-black text-lg">Sumar Stock</button></div>
                   </form>
                 </div>
               )}
 
-              {/* --- SALIDA / POS (ADMIN Y VENDEDOR) --- */}
+              {/* --- SALIDA / POS --- */}
               {activeTab === 'salida' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -886,8 +876,14 @@ export default function App() {
                       <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingUp className="text-emerald-500 w-8 h-8" /> Terminal de Venta (POS)</h2>
                       <p className="text-slate-500 text-sm mt-2">Deduce productos rápidamente al realizar una venta física o digital.</p>
                     </div>
-                    <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-200 shadow-inner">
-                      <ScanLine className="w-5 h-5"/> Soporte para Lector USB Activo
+                    <div className="flex gap-4">
+                      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+                        <Calendar className="w-4 h-4 text-slate-400"/>
+                        <input type="date" required value={formSalida.fechaOperacion} onChange={e => setFormSalida({...formSalida, fechaOperacion: e.target.value})} className="bg-transparent outline-none text-sm font-bold text-slate-600 cursor-pointer" />
+                      </div>
+                      <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-200 shadow-inner hidden md:flex">
+                        <ScanLine className="w-5 h-5"/> Lector USB
+                      </div>
                     </div>
                   </div>
                   <form onSubmit={handleGuardarSalida} className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -940,20 +936,22 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- HISTORIAL / AUDITORIA (SOLO ADMIN) --- */}
+              {/* --- HISTORIAL / AUDITORIA --- */}
               {activeTab === 'reporte' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
-                  <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><BarChart3 className="text-purple-600 w-8 h-8" /> Historial de Caja Operativa</h2></div>
+                  <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><BarChart3 className="text-purple-600 w-8 h-8" /> Historial de Auditoría</h2></div>
+                  
                   <div className="space-y-12">
+                    {/* TABLA VENTAS */}
                     <div>
                       <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500"/> Registro de Salidas (Ventas)</h3>
                       <div className="overflow-x-auto rounded-xl border border-slate-100">
                         <table className="min-w-full text-sm text-left whitespace-nowrap">
-                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha / Hora</th><th className="p-4">Vendedor</th><th className="p-4">Cliente</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha Operación</th><th className="p-4">Vendedor</th><th className="p-4">Cliente</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
                           <tbody className="divide-y divide-slate-100">
                             {salidas.map(s => (
                               <tr key={s.id} className="hover:bg-slate-50 transition-colors">
-                                <td className="p-4 text-slate-400 text-xs font-medium">{s.createdAt?.toDate().toLocaleString() || 'Reciente'}</td>
+                                <td className="p-4 text-slate-600 font-bold">{s.fechaOperacion || s.createdAt?.toDate().toLocaleDateString() || '-'}</td>
                                 <td className="p-4 text-xs font-medium text-slate-500">{s.vendedorEmail || 'Admin'}</td>
                                 <td className="p-4 font-medium text-slate-600">{s.documentoCliente || 'Mostrador'}</td>
                                 <td className="p-4 font-bold text-slate-700">{s.sku}</td>
@@ -966,10 +964,38 @@ export default function App() {
                                 </td>
                               </tr>
                             ))}
+                            {salidas.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400 font-medium">No hay ventas registradas</td></tr>}
                           </tbody>
                         </table>
                       </div>
                     </div>
+
+                    {/* TABLA INGRESOS */}
+                    <div>
+                      <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingDown className="w-5 h-5 text-blue-500"/> Registro de Ingresos (Lotes)</h3>
+                      <div className="overflow-x-auto rounded-xl border border-slate-100">
+                        <table className="min-w-full text-sm text-left whitespace-nowrap">
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha Operación</th><th className="p-4">Lote ID</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">FOB Total</th><th className="p-4 text-right">Acciones</th></tr></thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {ingresos.map(i => (
+                              <tr key={i.id} className="hover:bg-slate-50 transition-colors">
+                                <td className="p-4 text-slate-600 font-bold">{i.fechaOperacion || i.createdAt?.toDate().toLocaleDateString() || '-'}</td>
+                                <td className="p-4 font-mono font-bold text-slate-500">{i.loteId || 'S/N'}</td>
+                                <td className="p-4 font-bold text-slate-700">{i.sku}</td>
+                                <td className="p-4 text-center font-bold text-blue-600 bg-blue-50/50">{i.cantidad}</td>
+                                <td className="p-4 text-slate-500 font-medium">S/ {i.costoTotalLote?.toFixed(2) || '0.00'}</td>
+                                <td className="p-4 flex justify-end gap-1">
+                                  <button onClick={() => setEditingItem({ type: 'ingresos', id: i.id, data: i })} className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-2 rounded-lg" title="Editar"><Edit2 className="w-4 h-4"/></button>
+                                  <button onClick={() => handleDelete('ingresos', i.id)} className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4"/></button>
+                                </td>
+                              </tr>
+                            ))}
+                            {ingresos.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-medium">No hay ingresos registrados</td></tr>}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
                   </div>
                 </div>
               )}
@@ -988,7 +1014,7 @@ export default function App() {
                   <p className="text-xs text-slate-500 uppercase tracking-widest mt-1">Recibo de Venta</p>
                 </div>
                 <div className="space-y-2 text-sm text-slate-700 font-mono mb-6 border-b pb-4 border-dashed border-slate-300">
-                  <p className="flex justify-between"><span>Fecha:</span> <span>{receiptItem.createdAt?.toDate().toLocaleDateString() || 'Hoy'}</span></p>
+                  <p className="flex justify-between"><span>Fecha Op:</span> <span>{receiptItem.fechaOperacion || receiptItem.createdAt?.toDate().toLocaleDateString() || 'Hoy'}</span></p>
                   <p className="flex justify-between"><span>Cajero:</span> <span className="truncate ml-4">{receiptItem.vendedorEmail || firebaseUser?.email || 'Caja'}</span></p>
                   <p className="flex justify-between"><span>Cliente:</span> <span>{receiptItem.documentoCliente || 'Mostrador'}</span></p>
                   <p className="flex justify-between"><span>Método:</span> <span>{receiptItem.metodoPago || 'No esp.'}</span></p>
@@ -1016,6 +1042,7 @@ export default function App() {
                     <div className="grid grid-cols-2 gap-4">
                       <div><label className="block text-xs font-bold text-slate-500 mb-2">Cant</label><input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
                       {editingItem.type === 'salidas' && <div><label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label><input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>}
+                      <div className="col-span-2"><label className="block text-xs font-bold text-slate-500 mb-2">Fecha Lógica (Operación)</label><input type="date" value={editingItem.data.fechaOperacion || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, fechaOperacion: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-600" /></div>
                     </div>
                   ) : (
                     <div className="space-y-4">
