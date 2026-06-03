@@ -5,6 +5,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc, setDoc } from 'firebase/firestore';
 import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, Calendar, Settings, ToggleRight, ToggleLeft } from 'lucide-react';
 
+// --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
 try {
   const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
@@ -45,11 +46,9 @@ export default function App() {
   const [salidas, setSalidas] = useState([]);
   const [notification, setNotification] = useState({ msg: '', type: '' });
   
-  // ESTADO PARA PANEL DE SEGURIDAD
   const [permisos, setPermisos] = useState({ ocultasParaSocios: ['Tecnología'] });
 
   const [formProducto, setFormProducto] = useState({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' });
-  
   const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', fechaOperacion: getTodayString() });
   const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '', fechaOperacion: getTodayString() });
   
@@ -100,7 +99,7 @@ export default function App() {
       data.sort((a, b) => {
         const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
         const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
-        return dateB - dateA; // Orden Descendente
+        return dateB - dateA;
       });
       setIngresos(data);
     });
@@ -111,12 +110,11 @@ export default function App() {
       data.sort((a, b) => {
         const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
         const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
-        return dateB - dateA; // Orden Descendente
+        return dateB - dateA;
       });
       setSalidas(data);
     });
 
-    // CORRECCIÓN FATAL: Ruta válida de 4 segmentos (Carpeta/Archivo/Carpeta/Archivo)
     const configRef = doc(db, 'artifacts', appId, 'configuraciones', 'permisos_roles');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -265,19 +263,18 @@ export default function App() {
       const rows = text.split(/\r?\n/);
       const parsedData = [];
       
-      // Súper Inteligencia 2.0: Buscar el delimitador más común en las primeras 5 líneas de datos (ignorando el header)
       let comaCount = 0;
       let puntoComaCount = 0;
       let tabCount = 0;
       
-      const linesToCheck = Math.min(rows.length, 6); // Chequear hasta 5 líneas de datos
+      const linesToCheck = Math.min(rows.length, 6);
       for(let i=1; i < linesToCheck; i++){
           comaCount += (rows[i].match(/,/g) || []).length;
           puntoComaCount += (rows[i].match(/;/g) || []).length;
           tabCount += (rows[i].match(/\t/g) || []).length;
       }
 
-      let delimiter = ','; // Por defecto
+      let delimiter = ',';
       if (puntoComaCount > comaCount && puntoComaCount > tabCount) delimiter = ';';
       else if (tabCount > comaCount && tabCount > puntoComaCount) delimiter = '\t';
 
@@ -292,8 +289,12 @@ export default function App() {
         }
         if (cols.length >= 1 && cols[0]) {
           parsedData.push({
-            nombre: cols[0] || 'Sin Nombre', categoria: cols[1] || 'Importación', marca: cols[2] || 'Genérica',
-            cantidad: parseInt(cols[3]) || 0, costoUnitario: parseFloat(cols[4]) || 0, fechaOperacion: cols[5] || getTodayString()
+            nombre: cols[0] || 'Sin Nombre', 
+            categoria: cols[1] || 'Importación', 
+            marca: cols[2] || 'Genérica',
+            cantidad: parseInt(cols[3]) || 0, 
+            costoUnitario: parseFloat(cols[4]) || 0,
+            fechaOperacion: cols[5] || getTodayString()
           });
         }
       }
@@ -428,13 +429,20 @@ export default function App() {
     if (userRole !== 'admin') return showNotif('❌ Solo administradores pueden editar.', 'error');
     
     let updatedData = { ...editingItem.data };
+    
     if (editingItem.type === 'ingresos') {
-      const cFob = Number(updatedData.costoFob || 0); const cFlete = Number(updatedData.flete || 0); const cAduanas = Number(updatedData.aduanas || 0); const qty = Number(updatedData.cantidad || 1);
-      updatedData.costoTotalLote = cFob + cFlete + cAduanas; updatedData.costoUnitarioReal = updatedData.costoTotalLote / qty;
+      const cFob = Number(updatedData.costoFob || 0); 
+      const cFlete = Number(updatedData.flete || 0); 
+      const cAduanas = Number(updatedData.aduanas || 0); 
+      const qty = Number(updatedData.cantidad || 1);
+      updatedData.costoTotalLote = cFob + cFlete + cAduanas; 
+      updatedData.costoUnitarioReal = updatedData.costoTotalLote / qty;
     }
+    
     try {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', editingItem.type, editingItem.id), updatedData);
-      showNotif('✅ Actualizado con éxito'); setEditingItem(null);
+      showNotif('✅ Actualizado con éxito'); 
+      setEditingItem(null);
     } catch (error) { showNotif('❌ Error', 'error'); }
   };
 
@@ -585,6 +593,7 @@ export default function App() {
         </aside>
       )}
 
+      {/* --- CABECERA SUPERIOR --- */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm print:hidden">
           <div className="flex items-center gap-4">
@@ -604,7 +613,10 @@ export default function App() {
           </div>
         </header>
 
+        {/* ÁREA DE TRABAJO SCROLLEABLE */}
         <div className="flex-1 overflow-y-auto p-4 md:p-8 relative print:p-0 print:overflow-visible">
+          
+          {/* NOTIFICACIÓN FLOTANTE */}
           {notification.msg && <div className={`fixed bottom-6 right-6 md:left-1/2 md:transform md:-translate-x-1/2 px-6 py-4 rounded-2xl shadow-2xl font-bold z-50 flex items-center gap-3 animate-in slide-in-from-bottom-5 print:hidden ${notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>
              {notification.type === 'error' ? <AlertCircle className="w-5 h-5"/> : <ShieldCheck className="w-5 h-5"/>} {notification.msg}
           </div>}
@@ -614,6 +626,7 @@ export default function App() {
           ) : (
             <div className="max-w-6xl mx-auto space-y-6 pb-20 print:pb-0 print:space-y-0">
               
+              {/* --- DASHBOARD Y ALERTAS (SOLO ADMIN) --- */}
               {activeTab === 'dashboard' && userRole === 'admin' && (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between mb-2">
@@ -696,6 +709,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- CRM CLIENTES (SOLO ADMIN) --- */}
               {activeTab === 'clientes' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Users className="text-indigo-600 w-8 h-8" /> Directorio de Clientes (CRM)</h2><p className="text-slate-500 text-sm mt-2">Agrupación automática de clientes basada en su DNI/Nombre.</p></div>
@@ -718,6 +732,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- INVENTARIO MAESTRO (ADMIN Y VENDEDOR) --- */}
               {activeTab === 'stock' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6 border-b pb-6">
@@ -771,6 +786,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- CATÁLOGO (SOLO ADMIN) --- */}
               {activeTab === 'catalogo' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Tags className="text-indigo-600 w-8 h-8" /> Catálogo Maestro</h2></div>
@@ -801,6 +817,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- IMPORTAR (SOLO ADMIN) --- */}
               {activeTab === 'importar' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6">
@@ -875,6 +892,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- INGRESO (SOLO ADMIN) --- */}
               {activeTab === 'ingreso' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Ingresar Stock (Manual)</h2></div>
@@ -917,37 +935,16 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- SALIDA / POS (ADMIN Y VENDEDOR) --- */}
               {activeTab === 'salida' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
-                  
-                  {userRole === 'vendedor' && (
-                    <div className="mb-8 flex bg-emerald-50 border border-emerald-100 rounded-2xl p-4 md:p-6 justify-between items-center shadow-inner">
-                      <div>
-                        <h3 className="text-emerald-800 font-black flex items-center gap-2"><TrendingUp className="w-5 h-5"/> Tu Resumen de Hoy</h3>
-                        <p className="text-emerald-600 text-sm mt-1">Sigue así, registra tus ventas con precisión.</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs font-bold text-emerald-500 uppercase tracking-widest">Total Cobrado</p>
-                        <p className="text-2xl font-black text-emerald-700">
-                          S/ {salidas.filter(s => s.vendedorEmail === firebaseUser.email && (s.fechaOperacion === getTodayString() || (!s.fechaOperacion && s.createdAt?.toDate().toISOString().split('T')[0] === getTodayString()))).reduce((acc, curr) => acc + Number(curr.precioTotal || 0), 0).toFixed(2)}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
                   <div className="mb-8 border-b pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                     <div>
                       <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingUp className="text-emerald-500 w-8 h-8" /> Terminal de Venta (POS)</h2>
                       <p className="text-slate-500 text-sm mt-2">Deduce productos rápidamente al realizar una venta física o digital.</p>
                     </div>
-                    <div className="flex gap-4">
-                      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
-                        <Calendar className="w-4 h-4 text-slate-400"/>
-                        <input type="date" required value={formSalida.fechaOperacion} onChange={e => setFormSalida({...formSalida, fechaOperacion: e.target.value})} className="bg-transparent outline-none text-sm font-bold text-slate-600 cursor-pointer" />
-                      </div>
-                      <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-200 shadow-inner hidden md:flex">
-                        <ScanLine className="w-5 h-5"/> Lector USB
-                      </div>
+                    <div className="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 border border-emerald-200 shadow-inner">
+                      <ScanLine className="w-5 h-5"/> Soporte para Lector USB Activo
                     </div>
                   </div>
                   <form onSubmit={handleGuardarSalida} className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -984,13 +981,21 @@ export default function App() {
                         <div><label className="block text-xs font-bold text-slate-500 mb-2">Monto Cobrado (S/)</label><input type="number" step="0.01" value={formSalida.precioTotal} onChange={e => setFormSalida({...formSalida, precioTotal: e.target.value})} className="w-full px-4 py-4 border-2 border-slate-200 focus:border-emerald-500 rounded-xl font-bold text-lg outline-none transition-colors" placeholder="0.00" /></div>
                       </div>
                     </div>
+                    
+                    {/* MEJORA UX Y TIP PARA VENDEDOR */}
                     <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-5">
                       <h3 className="font-black flex items-center gap-2 text-slate-700 uppercase text-sm border-b pb-3"><ShieldCheck className="w-5 h-5 text-slate-400"/> Datos para el Recibo</h3>
                       <div className="grid grid-cols-2 gap-4">
                         <div><label className="block text-xs font-bold text-slate-500 mb-2">Método de Pago</label><select value={formSalida.metodoPago} onChange={e => setFormSalida({...formSalida, metodoPago: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:border-emerald-500"><option value="">Seleccionar...</option><option>Yape/Plin</option><option>Tarjeta POS</option><option>Efectivo</option></select></div>
-                        <div><label className="block text-xs font-bold text-slate-500 mb-2">DNI / Nombre Cliente</label><input type="text" value={formSalida.documentoCliente} onChange={e => setFormSalida({...formSalida, documentoCliente: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:border-emerald-500" placeholder="Opcional" /></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-2">DNI / Nombre Cliente</label><input type="text" value={formSalida.documentoCliente} onChange={e => setFormSalida({...formSalida, documentoCliente: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:border-emerald-500" placeholder="Ej: 7283... (Para Descuentos)" /></div>
+                      </div>
+                      
+                      <div className="mt-2 bg-blue-50 border border-blue-100 rounded-lg p-3 flex gap-2 items-start text-xs text-blue-700">
+                        <Info className="w-4 h-4 shrink-0 mt-0.5 text-blue-500" />
+                        <p><strong>Estrategia de Ventas:</strong> Pide el DNI diciendo: <em>"¿Me indica su DNI para afiliarlo a nuestros descuentos de cliente frecuente?"</em>. Esto alimenta nuestro CRM automático.</p>
                       </div>
                     </div>
+
                     <div className="md:col-span-2 flex justify-end mt-4 pt-6 border-t border-slate-200">
                       <button type="submit" className="w-full md:w-auto bg-emerald-500 hover:bg-emerald-600 text-white px-12 py-4 rounded-xl font-black text-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-200 active:scale-95 transition-all">
                          <ShieldCheck className="w-6 h-6"/> Procesar Venta
@@ -1000,6 +1005,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* --- HISTORIAL / AUDITORIA (SOLO ADMIN) --- */}
               {activeTab === 'reporte' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><BarChart3 className="text-purple-600 w-8 h-8" /> Historial de Auditoría</h2></div>
@@ -1102,6 +1108,7 @@ export default function App() {
           )}
 
           {/* === MODALES GLOBALES === */}
+
           {receiptItem && (
             <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 print:bg-white print:static print:inset-auto print:block">
               <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-8 relative print:shadow-none print:w-full">
@@ -1137,8 +1144,45 @@ export default function App() {
                 <form onSubmit={handleUpdateItem} className="space-y-5">
                   {editingItem.type !== 'productos' ? (
                     <div className="grid grid-cols-2 gap-4">
-                      <div><label className="block text-xs font-bold text-slate-500 mb-2">Cant</label><input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
-                      {editingItem.type === 'salidas' && <div><label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label><input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" /></div>}
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-2">Cant</label>
+                        <input required type="number" min="1" value={editingItem.data.cantidad} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, cantidad: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                      </div>
+                      
+                      {editingItem.type === 'salidas' && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 mb-2">Total (S/)</label>
+                          <input type="number" step="0.01" value={editingItem.data.precioTotal || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, precioTotal: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                        </div>
+                      )}
+
+                      {editingItem.type === 'ingresos' && (
+                        <>
+                          <div className="col-span-2">
+                            <label className="block text-xs font-bold text-slate-500 mb-2">ID de Lote</label>
+                            <input type="text" value={editingItem.data.loteId || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, loteId: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                          </div>
+                          <div className="col-span-2 grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 mb-2">Costo FOB Total</label>
+                              <input type="number" step="0.01" value={editingItem.data.costoFob || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, costoFob: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 mb-2">Flete</label>
+                              <input type="number" step="0.01" value={editingItem.data.flete || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, flete: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 mb-2">Aduanas</label>
+                              <input type="number" step="0.01" value={editingItem.data.aduanas || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, aduanas: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-500 mb-2">IGV</label>
+                              <input type="number" step="0.01" value={editingItem.data.igv || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, igv: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" />
+                            </div>
+                          </div>
+                        </>
+                      )}
+
                       <div className="col-span-2">
                         <label className="block text-xs font-bold text-slate-500 mb-2">Fecha Lógica (Operación)</label>
                         <input type="date" value={editingItem.data.fechaOperacion || ''} onChange={e => setEditingItem({ ...editingItem, data: { ...editingItem.data, fechaOperacion: e.target.value } })} className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-600" />
