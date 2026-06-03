@@ -25,7 +25,7 @@ try {
 
 // Helper para obtener fecha de hoy en formato YYYY-MM-DD local
 const getTodayString = () => {
-  const tzoffset = (new Date()).getTimezoneOffset() * 60000; // offset in milliseconds
+  const tzoffset = (new Date()).getTimezoneOffset() * 60000;
   return (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
 };
 
@@ -45,12 +45,11 @@ export default function App() {
   const [salidas, setSalidas] = useState([]);
   const [notification, setNotification] = useState({ msg: '', type: '' });
   
-  // NUEVO: Estado para los permisos dinámicos (Panel de Seguridad)
+  // ESTADO PARA PANEL DE SEGURIDAD
   const [permisos, setPermisos] = useState({ ocultasParaSocios: ['Tecnología'] });
 
   const [formProducto, setFormProducto] = useState({ nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' });
   
-  // NUEVO: Campos de fechaOperacion añadidos
   const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', fechaOperacion: getTodayString() });
   const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '', fechaOperacion: getTodayString() });
   
@@ -92,7 +91,6 @@ export default function App() {
   useEffect(() => {
     if (!firebaseUser || !db) return;
     
-    // Escuchar datos principales
     const productosRef = collection(db, 'artifacts', appId, 'public', 'data', 'productos');
     const unsubProductos = onSnapshot(productosRef, (snapshot) => setProductos(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
 
@@ -102,7 +100,7 @@ export default function App() {
       data.sort((a, b) => {
         const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
         const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
-        return dateB - dateA; // Descendente
+        return dateB - dateA; // Orden Descendente
       });
       setIngresos(data);
     });
@@ -113,13 +111,13 @@ export default function App() {
       data.sort((a, b) => {
         const dateA = new Date(a.fechaOperacion || a.createdAt?.toDate() || 0).getTime();
         const dateB = new Date(b.fechaOperacion || b.createdAt?.toDate() || 0).getTime();
-        return dateB - dateA; // Descendente
+        return dateB - dateA; // Orden Descendente
       });
       setSalidas(data);
     });
 
-    // Escuchar configuración de permisos dinámicos
-    const configRef = doc(db, 'artifacts', appId, 'public', 'config', 'permisos');
+    // CORRECCIÓN FATAL: Ruta válida de 4 segmentos (Carpeta/Archivo/Carpeta/Archivo)
+    const configRef = doc(db, 'artifacts', appId, 'configuraciones', 'permisos_roles');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
       if (docSnap.exists()) {
         setPermisos(docSnap.data());
@@ -152,8 +150,6 @@ export default function App() {
     });
 
     let finalStock = Object.values(stockMap);
-    
-    // APLICANDO PERMISOS DINÁMICOS AL SOCIO
     if (userRole === 'socio') {
       const ocultas = permisos.ocultasParaSocios || [];
       finalStock = finalStock.filter(item => !ocultas.includes(item.categoria));
@@ -227,13 +223,13 @@ export default function App() {
     
     let nuevasOcultas;
     if (estaOculta) {
-      nuevasOcultas = ocultasActuales.filter(c => c !== categoria); // La hacemos visible
+      nuevasOcultas = ocultasActuales.filter(c => c !== categoria);
     } else {
-      nuevasOcultas = [...ocultasActuales, categoria]; // La ocultamos
+      nuevasOcultas = [...ocultasActuales, categoria];
     }
     
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'config', 'permisos'), { ocultasParaSocios: nuevasOcultas }, { merge: true });
+      await setDoc(doc(db, 'artifacts', appId, 'configuraciones', 'permisos_roles'), { ocultasParaSocios: nuevasOcultas }, { merge: true });
       showNotif(`✅ Visibilidad de "${categoria}" actualizada`);
     } catch (error) {
       showNotif('❌ Error al actualizar permisos', 'error');
@@ -319,7 +315,6 @@ export default function App() {
         }
 
         const costoTotalLote = item.costoUnitario * item.cantidad;
-        // Normaliza fecha a YYYY-MM-DD
         let fechaLimpia = item.fechaOperacion.trim();
         const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
         if (!dateRegex.test(fechaLimpia)) fechaLimpia = getTodayString();
@@ -375,7 +370,6 @@ export default function App() {
         loteId: finalLoteId, sku: formIngreso.sku, cantidad: formIngreso.cantidad, costoFob: formIngreso.costoFob, flete: formIngreso.flete, aduanas: formIngreso.aduanas, igv: formIngreso.igv, costoTotalLote, costoUnitarioReal, fechaOperacion: formIngreso.fechaOperacion, createdAt: serverTimestamp()
       });
       showNotif('✅ Ingreso registrado');
-      // Mantiene el lote pero resetea el resto. Mantiene la fecha elegida para facilitar ingreso multiple del mismo dia
       setFormIngreso(prev => ({ ...prev, sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', loteSelect: finalLoteId, loteNuevo: '' }));
       setIngresoSearch('');
     } catch (error) { showNotif('❌ Error al guardar', 'error'); }
@@ -393,7 +387,7 @@ export default function App() {
     try {
       const result = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...formSalida, vendedorEmail: firebaseUser.email, createdAt: serverTimestamp() });
       showNotif('✅ Venta registrada exitosamente');
-      setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date(formSalida.fechaOperacion) } }); // Muestra ticket automatico simulando fecha
+      setReceiptItem({ id: result.id, ...formSalida, createdAt: { toDate: () => new Date(formSalida.fechaOperacion) } });
       setFormSalida(prev => ({ ...prev, sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '' }));
       setSalidaSearch('');
     } catch (error) { showNotif('❌ Error al registrar venta', 'error'); }
@@ -518,7 +512,6 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 overflow-hidden">
       {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
 
-      {/* --- SIDEBAR PARA ADMINS Y VENDEDORES --- */}
       {userRole !== 'socio' && !isKoreaView && (
         <aside className={`fixed md:static inset-y-0 left-0 z-50 w-72 bg-slate-900 text-white flex flex-col transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none print:hidden`}>
           <div className="p-6 md:p-8 flex justify-between items-center">
@@ -549,7 +542,6 @@ export default function App() {
                 <button onClick={() => changeTab('salida')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'salida' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingUp className="w-5 h-5" /> Registrar Venta <span className="ml-auto bg-indigo-500 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">POS</span></button>
                 <button onClick={() => changeTab('reporte')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'reporte' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><BarChart3 className="w-5 h-5" /> Historial de Caja</button>
 
-                {/* NUEVO: PANEL DE SEGURIDAD */}
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Administración</p>
                 <button onClick={() => changeTab('seguridad')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'seguridad' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Settings className="w-5 h-5" /> Seguridad y Accesos</button>
               </>
@@ -579,7 +571,6 @@ export default function App() {
         </aside>
       )}
 
-      {/* --- CABECERA SUPERIOR --- */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm print:hidden">
           <div className="flex items-center gap-4">
@@ -604,13 +595,11 @@ export default function App() {
              {notification.type === 'error' ? <AlertCircle className="w-5 h-5"/> : <ShieldCheck className="w-5 h-5"/>} {notification.msg}
           </div>}
 
-          {/* RENDER SOCIO */}
           {(isKoreaView || userRole === 'socio') ? (
             <div className="max-w-6xl mx-auto">{renderVistaCorea()}</div>
           ) : (
             <div className="max-w-6xl mx-auto space-y-6 pb-20 print:pb-0 print:space-y-0">
               
-              {/* --- DASHBOARD Y ALERTAS (SOLO ADMIN) --- */}
               {activeTab === 'dashboard' && userRole === 'admin' && (
                 <div className="space-y-6">
                   <div className="flex items-center justify-between mb-2">
@@ -693,7 +682,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- CRM CLIENTES (SOLO ADMIN) --- */}
               {activeTab === 'clientes' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Users className="text-indigo-600 w-8 h-8" /> Directorio de Clientes (CRM)</h2><p className="text-slate-500 text-sm mt-2">Agrupación automática de clientes basada en su DNI/Nombre.</p></div>
@@ -716,7 +704,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- INVENTARIO MAESTRO --- */}
               {activeTab === 'stock' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6 border-b pb-6">
@@ -770,7 +757,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- CATÁLOGO --- */}
               {activeTab === 'catalogo' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Tags className="text-indigo-600 w-8 h-8" /> Catálogo Maestro</h2></div>
@@ -801,7 +787,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- IMPORTACIÓN MASIVA --- */}
               {activeTab === 'importar' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6">
@@ -876,7 +861,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- INGRESO MANUAL --- */}
               {activeTab === 'ingreso' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Ingresar Stock (Manual)</h2></div>
@@ -919,11 +903,9 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- SALIDA / POS --- */}
               {activeTab === 'salida' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   
-                  {/* WIDGET DEL VENDEDOR (NUEVO) */}
                   {userRole === 'vendedor' && (
                     <div className="mb-8 flex bg-emerald-50 border border-emerald-100 rounded-2xl p-4 md:p-6 justify-between items-center shadow-inner">
                       <div>
@@ -1004,13 +986,11 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- HISTORIAL / AUDITORIA --- */}
               {activeTab === 'reporte' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><BarChart3 className="text-purple-600 w-8 h-8" /> Historial de Auditoría</h2></div>
                   
                   <div className="space-y-12">
-                    {/* TABLA VENTAS */}
                     <div>
                       <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500"/> Registro de Salidas (Ventas)</h3>
                       <div className="overflow-x-auto rounded-xl border border-slate-100">
@@ -1038,7 +1018,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* TABLA INGRESOS */}
                     <div>
                       <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingDown className="w-5 h-5 text-blue-500"/> Registro de Ingresos (Lotes)</h3>
                       <div className="overflow-x-auto rounded-xl border border-slate-100">
@@ -1063,7 +1042,6 @@ export default function App() {
                         </table>
                       </div>
                     </div>
-
                   </div>
                 </div>
               )}
@@ -1110,7 +1088,6 @@ export default function App() {
           )}
 
           {/* === MODALES GLOBALES === */}
-
           {receiptItem && (
             <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 print:bg-white print:static print:inset-auto print:block">
               <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-8 relative print:shadow-none print:w-full">
