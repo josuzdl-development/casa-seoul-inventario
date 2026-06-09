@@ -975,7 +975,7 @@ export default function App() {
                       {/* Dropdown Estado */}
                       <select className="bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 px-3 py-2 outline-none focus:border-indigo-500 min-w-[140px]" value={filtroInvEstado} onChange={(e) => setFiltroInvEstado(e.target.value)}>
                         <option value="Todos">Cualquier Stock</option>
-                        <option value="Suficiente">Normal (> 5)</option>
+                        <option value="Suficiente">Normal (&gt; 5)</option>
                         <option value="Bajo">Bajo (1 a 5)</option>
                         <option value="Agotado">Agotado (0)</option>
                       </select>
