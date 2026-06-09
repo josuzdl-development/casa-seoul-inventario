@@ -67,6 +67,7 @@ export default function App() {
   
   const [filtroFechaInicio, setFiltroFechaInicio] = useState('');
   const [filtroFechaFin, setFiltroFechaFin] = useState('');
+  const [sortSalidas, setSortSalidas] = useState('fecha_desc');
 
   // REFERENCIAS PARA MODO POS (ESCANER)
   const scannerInputRef = useRef(null);
@@ -161,11 +162,10 @@ export default function App() {
     return { totalVentas, gananciaBruta: totalVentas - totalCostoVendido, valorInventario, unidadesVendidas };
   }, [salidas, stockCalculado]);
 
-  // CÁLCULO ESTILO TABLA DINÁMICA: AGRUPACIÓN POR DÍAS (NUEVO)
+  // CÁLCULO ESTILO TABLA DINÁMICA: AGRUPACIÓN POR DÍAS
   const ventasAgrupadasPorDia = useMemo(() => {
     const agrupado = {};
     salidas.forEach(sal => {
-      // Tomamos la fecha de operación o la fecha del sistema como fallback
       const fechaBase = sal.fechaOperacion || (sal.createdAt ? new Date(sal.createdAt.toMillis() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0] : 'Sin Fecha');
       
       if (!agrupado[fechaBase]) {
@@ -183,19 +183,32 @@ export default function App() {
       agrupado[fechaBase].gananciaNeta = agrupado[fechaBase].ventasBrutas - agrupado[fechaBase].costoTotal;
     });
 
-    // Convertimos a array y ordenamos del más reciente al más antiguo
     return Object.values(agrupado).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
   }, [salidas, stockCalculado]);
 
-  // FILTRO DINÁMICO DE HISTORIAL (ESTILO EXCEL SUMATORIA)
+  // FILTRO DINÁMICO DE HISTORIAL (ESTILO EXCEL SUMATORIA Y ORDEN)
   const salidasFiltradas = useMemo(() => {
-    return salidas.filter(s => {
+    let filtradas = salidas.filter(s => {
       const fechaVal = s.fechaOperacion || (s.createdAt ? new Date(s.createdAt.toMillis() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0] : '');
       if (filtroFechaInicio && fechaVal && fechaVal < filtroFechaInicio) return false;
       if (filtroFechaFin && fechaVal && fechaVal > filtroFechaFin) return false;
       return true;
     });
-  }, [salidas, filtroFechaInicio, filtroFechaFin]);
+
+    filtradas.sort((a, b) => {
+      if (sortSalidas === 'producto_asc') {
+         const nameA = productos.find(p => p.sku === a.sku)?.nombre || a.sku;
+         const nameB = productos.find(p => p.sku === b.sku)?.nombre || b.sku;
+         return nameA.localeCompare(nameB);
+      }
+      const dateA = a.fechaOperacion || (a.createdAt ? new Date(a.createdAt.toMillis()).toISOString() : '');
+      const dateB = b.fechaOperacion || (b.createdAt ? new Date(b.createdAt.toMillis()).toISOString() : '');
+      if (sortSalidas === 'fecha_asc') return dateA.localeCompare(dateB);
+      return dateB.localeCompare(dateA); 
+    });
+
+    return filtradas;
+  }, [salidas, filtroFechaInicio, filtroFechaFin, sortSalidas, productos]);
 
   const sumatoriaFiltrada = useMemo(() => {
     return salidasFiltradas.reduce((acc, s) => {
@@ -221,7 +234,6 @@ export default function App() {
   }, [salidas]);
 
   const topProductos = useMemo(() => {
-    // Calculamos el margen de rentabilidad por producto
     const prods = [...stockCalculado].map(p => {
       const costoDeLoVendido = p.costoPromedio * p.totalSalidas;
       const margen = p.ventasGeneradas - costoDeLoVendido;
@@ -532,9 +544,9 @@ export default function App() {
           <div className="p-3 bg-blue-50 rounded-xl"><Globe2 className="w-8 h-8 text-blue-500" /></div>
         </div>
       </div>
-      <div className="overflow-x-auto rounded-xl border border-slate-100">
-        <table className="min-w-full text-left border-collapse">
-          <thead><tr className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider font-bold"><th className="p-5 border-b">SKU / Item ID</th><th className="p-5 border-b">Product Name</th><th className="p-5 border-b">Category</th><th className="p-5 border-b text-right">Current Stock</th><th className="p-5 border-b text-center">Status / Details</th></tr></thead>
+      <div className="overflow-auto max-h-[65vh] rounded-xl border border-slate-100">
+        <table className="min-w-full text-left text-sm whitespace-nowrap relative">
+          <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider font-bold border-b border-slate-200 sticky top-0 z-10 shadow-sm"><tr className="bg-slate-50"><th className="p-5 border-b">SKU / Item ID</th><th className="p-5 border-b">Product Name</th><th className="p-5 border-b">Category</th><th className="p-5 border-b text-right">Current Stock</th><th className="p-5 border-b text-center">Status / Details</th></tr></thead>
           <tbody className="text-slate-700 divide-y divide-slate-100 bg-white">
             {stockFiltrado.map(item => (
               <tr key={item.sku} className="hover:bg-slate-50 transition-colors group">
@@ -724,8 +736,8 @@ export default function App() {
                     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
                       <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><CalendarDays className="w-5 h-5 text-blue-500"/> Reporte de Caja por Día</h3>
                       <div className="overflow-y-auto max-h-[300px] pr-2 flex-1">
-                        <table className="w-full text-sm text-left">
-                          <thead className="bg-slate-50 sticky top-0 z-10">
+                        <table className="w-full text-sm text-left relative">
+                          <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm border-b border-slate-200">
                             <tr>
                               <th className="py-3 px-2 font-bold text-slate-500 uppercase text-xs">Fecha</th>
                               <th className="py-3 px-2 font-bold text-slate-500 uppercase text-xs text-center">Unidades</th>
@@ -778,9 +790,9 @@ export default function App() {
               {activeTab === 'clientes' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Users className="text-indigo-600 w-8 h-8" /> Directorio de Clientes (CRM)</h2><p className="text-slate-500 text-sm mt-2">Agrupación automática de clientes basada en su DNI/Nombre.</p></div>
-                  <div className="overflow-x-auto rounded-xl border border-slate-100">
-                    <table className="min-w-full text-left text-sm whitespace-nowrap">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-5">Identificador</th><th className="p-5 text-center">Nº Compras</th><th className="p-5 text-right">Gasto Acumulado</th><th className="p-5">Última Compra</th></tr></thead>
+                  <div className="overflow-auto max-h-[65vh] rounded-xl border border-slate-100">
+                    <table className="min-w-full text-left text-sm whitespace-nowrap relative">
+                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm"><tr className="bg-slate-50"><th className="p-5">Identificador</th><th className="p-5 text-center">Nº Compras</th><th className="p-5 text-right">Gasto Acumulado</th><th className="p-5">Última Compra</th></tr></thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
                         {directorioClientes.map((cliente, i) => (
                           <tr key={i} className="hover:bg-slate-50 transition-colors">
@@ -810,10 +822,10 @@ export default function App() {
                       <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 shrink-0"><select className="text-sm border-none bg-transparent outline-none font-bold text-slate-600 cursor-pointer pl-2" value={exportCategory} onChange={(e) => setExportCategory(e.target.value)}><option value="Todas">Todo el Inventario</option>{categoriasUnicas.map(cat => <option key={cat} value={cat}>Solo {cat}</option>)}</select><button onClick={handleExportCSV} className="ml-2 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-md transition-colors flex items-center justify-center" title="Descargar CSV"><Download className="w-5 h-5" /></button></div>
                     </div>
                   </div>
-                  <div className="overflow-x-auto rounded-xl border border-slate-100">
-                    <table className="min-w-full text-left text-sm whitespace-nowrap">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100">
-                        <tr>
+                  <div className="overflow-auto max-h-[65vh] rounded-xl border border-slate-100">
+                    <table className="min-w-full text-left text-sm whitespace-nowrap relative">
+                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                        <tr className="bg-slate-50">
                           <th className="p-4 md:p-5">SKU</th>
                           <th className="p-4 md:p-5">Producto</th>
                           <th className="p-4 md:p-5 text-center">Ingresos</th>
@@ -876,8 +888,8 @@ export default function App() {
 
                     <div className="md:col-span-3 flex justify-end mt-2"><button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-8 py-3 rounded-xl font-bold">Guardar y Generar SKU</button></div>
                   </form>
-                  <div className="overflow-x-auto rounded-xl border border-slate-100">
-                    <table className="min-w-full text-sm text-left whitespace-nowrap"><thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Detalles</th><th className="p-4 text-right">Acción</th></tr></thead><tbody className="divide-y divide-slate-100">{productos.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-mono font-bold text-indigo-600">{p.sku}</td><td className="p-4 font-bold text-slate-700">{p.nombre}</td><td className="p-4 text-center"><button onClick={() => setViewProductDetails(p)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"><Eye className="w-5 h-5"/></button></td><td className="p-4 text-right"><button onClick={() => handleDeleteProducto(p.id, p.sku)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg"><Trash2 className="w-5 h-5"/></button></td></tr>))}</tbody></table>
+                  <div className="overflow-auto max-h-[65vh] rounded-xl border border-slate-100">
+                    <table className="min-w-full text-sm text-left whitespace-nowrap relative"><thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm"><tr className="bg-slate-50"><th className="p-4">SKU</th><th className="p-4">Producto</th><th className="p-4 text-center">Detalles</th><th className="p-4 text-right">Acción</th></tr></thead><tbody className="divide-y divide-slate-100 bg-white">{productos.map(p => (<tr key={p.id} className="hover:bg-slate-50"><td className="p-4 font-mono font-bold text-indigo-600">{p.sku}</td><td className="p-4 font-bold text-slate-700">{p.nombre}</td><td className="p-4 text-center"><button onClick={() => setViewProductDetails(p)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors"><Eye className="w-5 h-5"/></button></td><td className="p-4 text-right"><button onClick={() => handleDeleteProducto(p.id, p.sku)} className="text-red-500 hover:bg-red-100 p-2 rounded-lg"><Trash2 className="w-5 h-5"/></button></td></tr>))}</tbody></table>
                   </div>
                 </div>
               )}
@@ -926,10 +938,10 @@ export default function App() {
                         </div>
                       </div>
                       
-                      <div className="max-h-64 overflow-y-auto">
-                        <table className="min-w-full text-sm text-left whitespace-nowrap">
-                          <thead className="bg-white text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-100 sticky top-0">
-                            <tr><th className="p-4">Fecha Op.</th><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Marca</th><th className="p-4 text-center">Cant.</th><th className="p-4 text-right">Costo Unitario</th></tr>
+                      <div className="overflow-auto max-h-[65vh]">
+                        <table className="min-w-full text-sm text-left whitespace-nowrap relative">
+                          <thead className="bg-white text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                            <tr className="bg-white"><th className="p-4">Fecha Op.</th><th className="p-4">Producto</th><th className="p-4">Categoría</th><th className="p-4">Marca</th><th className="p-4 text-center">Cant.</th><th className="p-4 text-right">Costo Unitario</th></tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 bg-slate-50/30">
                             {csvPreview.map((item, idx) => (
@@ -1113,14 +1125,22 @@ export default function App() {
                       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
                         <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider flex items-center gap-2"><TrendingUp className="w-5 h-5 text-emerald-500"/> Registro de Salidas (Ventas)</h3>
                         
-                        {/* FILTROS DE FECHAS ESTILO EXCEL */}
-                        <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                          <Filter className="w-4 h-4 text-slate-400 ml-1" />
-                          <input type="date" value={filtroFechaInicio} onChange={(e) => setFiltroFechaInicio(e.target.value)} className="bg-transparent border-none outline-none text-xs font-bold text-slate-600" title="Desde la Fecha" />
-                          <span className="text-slate-300">-</span>
-                          <input type="date" value={filtroFechaFin} onChange={(e) => setFiltroFechaFin(e.target.value)} className="bg-transparent border-none outline-none text-xs font-bold text-slate-600" title="Hasta la Fecha" />
-                          {(filtroFechaInicio || filtroFechaFin) && (
-                            <button onClick={() => {setFiltroFechaInicio(''); setFiltroFechaFin('');}} className="ml-2 text-slate-400 hover:text-red-500"><X className="w-4 h-4" /></button>
+                        {/* FILTROS DE FECHAS ESTILO EXCEL Y ORDEN */}
+                        <div className="flex flex-col sm:flex-row items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                          <div className="flex items-center gap-2">
+                            <Filter className="w-4 h-4 text-slate-400 ml-1" />
+                            <input type="date" value={filtroFechaInicio} onChange={(e) => setFiltroFechaInicio(e.target.value)} className="bg-transparent border-none outline-none text-xs font-bold text-slate-600" title="Desde la Fecha" />
+                            <span className="text-slate-300">-</span>
+                            <input type="date" value={filtroFechaFin} onChange={(e) => setFiltroFechaFin(e.target.value)} className="bg-transparent border-none outline-none text-xs font-bold text-slate-600" title="Hasta la Fecha" />
+                          </div>
+                          <div className="h-4 w-px bg-slate-300 hidden sm:block"></div>
+                          <select value={sortSalidas} onChange={(e) => setSortSalidas(e.target.value)} className="bg-transparent border-none outline-none text-xs font-bold text-slate-600 cursor-pointer">
+                            <option value="fecha_desc">↓ Más recientes</option>
+                            <option value="fecha_asc">↑ Más antiguos</option>
+                            <option value="producto_asc">A-Z Por Producto</option>
+                          </select>
+                          {(filtroFechaInicio || filtroFechaFin || sortSalidas !== 'fecha_desc') && (
+                            <button onClick={() => {setFiltroFechaInicio(''); setFiltroFechaFin(''); setSortSalidas('fecha_desc');}} className="ml-2 text-slate-400 hover:text-red-500" title="Limpiar filtros"><X className="w-4 h-4" /></button>
                           )}
                         </div>
                       </div>
@@ -1136,25 +1156,31 @@ export default function App() {
                         </div>
                       )}
 
-                      <div className="overflow-x-auto rounded-xl border border-slate-100">
-                        <table className="min-w-full text-sm text-left whitespace-nowrap">
-                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha Operación</th><th className="p-4">Vendedor</th><th className="p-4">Cliente</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {salidasFiltradas.map(s => (
+                      <div className="overflow-auto max-h-[65vh] rounded-xl border border-slate-100">
+                        <table className="min-w-full text-sm text-left whitespace-nowrap relative">
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm"><tr className="bg-slate-50"><th className="p-4">Fecha Operación</th><th className="p-4">Vendedor</th><th className="p-4">Cliente</th><th className="p-4">Producto</th><th className="p-4 text-center">Cant</th><th className="p-4">Total (S/)</th><th className="p-4 text-right">Acciones</th></tr></thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {salidasFiltradas.map(s => {
+                              const productoObj = productos.find(p => p.sku === s.sku);
+                              return (
                               <tr key={s.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="p-4 text-slate-600 font-bold">{s.fechaOperacion || s.createdAt?.toDate().toLocaleDateString() || '-'}</td>
                                 <td className="p-4 text-xs font-medium text-slate-500">{s.vendedorEmail || 'Admin'}</td>
                                 <td className="p-4 font-medium text-slate-600">{s.documentoCliente || 'Mostrador'}</td>
-                                <td className="p-4 font-bold text-slate-700">{s.sku}</td>
+                                <td className="p-4">
+                                  <span className="font-bold text-slate-700 block truncate max-w-[200px]" title={productoObj?.nombre}>{productoObj?.nombre || 'Descatalogado'}</span>
+                                  <span className="text-[10px] text-slate-400 font-mono mt-0.5">{s.sku}</span>
+                                </td>
                                 <td className="p-4 text-center font-bold text-emerald-600 bg-emerald-50/50">{s.cantidad}</td>
                                 <td className="p-4 text-emerald-600 font-black">{s.precioTotal ? `S/ ${s.precioTotal}` : '-'}</td>
                                 <td className="p-4 flex justify-end gap-1">
+                                  {productoObj && <button onClick={() => setViewProductDetails(productoObj)} className="text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 p-2 rounded-lg" title="Ver Producto"><Eye className="w-4 h-4"/></button>}
                                   <button onClick={() => setReceiptItem(s)} className="text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 p-2 rounded-lg" title="Imprimir Ticket"><Printer className="w-4 h-4"/></button>
                                   <button onClick={() => setEditingItem({ type: 'salidas', id: s.id, data: s })} className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-2 rounded-lg" title="Editar"><Edit2 className="w-4 h-4"/></button>
                                   <button onClick={() => handleDelete('salidas', s.id)} className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4"/></button>
                                 </td>
                               </tr>
-                            ))}
+                            )})}
                             {salidasFiltradas.length === 0 && <tr><td colSpan="7" className="p-8 text-center text-slate-400 font-medium">No hay ventas en este rango.</td></tr>}
                           </tbody>
                         </table>
@@ -1163,23 +1189,29 @@ export default function App() {
 
                     <div>
                       <h3 className="font-black text-sm text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2"><TrendingDown className="w-5 h-5 text-blue-500"/> Registro de Ingresos (Lotes)</h3>
-                      <div className="overflow-x-auto rounded-xl border border-slate-100">
-                        <table className="min-w-full text-sm text-left whitespace-nowrap">
-                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-100"><tr><th className="p-4">Fecha Operación</th><th className="p-4">Lote ID</th><th className="p-4">SKU</th><th className="p-4 text-center">Cant</th><th className="p-4">FOB Total</th><th className="p-4 text-right">Acciones</th></tr></thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {ingresos.map(i => (
+                      <div className="overflow-auto max-h-[65vh] rounded-xl border border-slate-100">
+                        <table className="min-w-full text-sm text-left whitespace-nowrap relative">
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm"><tr className="bg-slate-50"><th className="p-4">Fecha Operación</th><th className="p-4">Lote ID</th><th className="p-4">Producto</th><th className="p-4 text-center">Cant</th><th className="p-4">FOB Total</th><th className="p-4 text-right">Acciones</th></tr></thead>
+                          <tbody className="divide-y divide-slate-100 bg-white">
+                            {ingresos.map(i => {
+                              const productoObj = productos.find(p => p.sku === i.sku);
+                              return (
                               <tr key={i.id} className="hover:bg-slate-50 transition-colors">
                                 <td className="p-4 text-slate-600 font-bold">{i.fechaOperacion || i.createdAt?.toDate().toLocaleDateString() || '-'}</td>
                                 <td className="p-4 font-mono font-bold text-slate-500">{i.loteId || 'S/N'}</td>
-                                <td className="p-4 font-bold text-slate-700">{i.sku}</td>
+                                <td className="p-4">
+                                  <span className="font-bold text-slate-700 block truncate max-w-[200px]" title={productoObj?.nombre}>{productoObj?.nombre || 'Descatalogado'}</span>
+                                  <span className="text-[10px] text-slate-400 font-mono mt-0.5">{i.sku}</span>
+                                </td>
                                 <td className="p-4 text-center font-bold text-blue-600 bg-blue-50/50">{i.cantidad}</td>
                                 <td className="p-4 text-slate-500 font-medium">S/ {i.costoTotalLote?.toFixed(2) || '0.00'}</td>
                                 <td className="p-4 flex justify-end gap-1">
+                                  {productoObj && <button onClick={() => setViewProductDetails(productoObj)} className="text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 p-2 rounded-lg" title="Ver Producto"><Eye className="w-4 h-4"/></button>}
                                   <button onClick={() => setEditingItem({ type: 'ingresos', id: i.id, data: i })} className="text-slate-400 hover:text-blue-600 hover:bg-blue-50 p-2 rounded-lg" title="Editar"><Edit2 className="w-4 h-4"/></button>
                                   <button onClick={() => handleDelete('ingresos', i.id)} className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg"><Trash2 className="w-4 h-4"/></button>
                                 </td>
                               </tr>
-                            ))}
+                            )})}
                             {ingresos.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-medium">No hay ingresos registrados</td></tr>}
                           </tbody>
                         </table>
