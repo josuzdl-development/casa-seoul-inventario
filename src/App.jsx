@@ -3,7 +3,7 @@ import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, CalendarDays, Filter, Settings } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, CalendarDays, Filter, Settings, Activity } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -35,8 +35,6 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isKoreaView, setIsKoreaView] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [exportCategory, setExportCategory] = useState('Todas');
   
   // DATA STATES
   const [productos, setProductos] = useState([]);
@@ -65,6 +63,12 @@ export default function App() {
   const [importLote, setImportLote] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   
+  // FILTROS AVANZADOS DE INVENTARIO
+  const [searchTerm, setSearchTerm] = useState('');
+  const [exportCategory, setExportCategory] = useState('Todas');
+  const [filtroInvMarca, setFiltroInvMarca] = useState('Todas');
+  const [filtroInvEstado, setFiltroInvEstado] = useState('Todos'); // 'Todos', 'Agotado', 'Bajo', 'Suficiente'
+
   const [filtroFechaInicio, setFiltroFechaInicio] = useState('');
   const [filtroFechaFin, setFiltroFechaFin] = useState('');
   const [sortSalidas, setSortSalidas] = useState('fecha_desc');
@@ -162,7 +166,7 @@ export default function App() {
     return { totalVentas, gananciaBruta: totalVentas - totalCostoVendido, valorInventario, unidadesVendidas };
   }, [salidas, stockCalculado]);
 
-  // CÁLCULO ESTILO TABLA DINÁMICA: AGRUPACIÓN POR DÍAS
+  // CÁLCULO ESTILO TABLA DINÁMICA: AGRUPACIÓN POR DÍAS (PARA TABLA Y GRÁFICO)
   const ventasAgrupadasPorDia = useMemo(() => {
     const agrupado = {};
     salidas.forEach(sal => {
@@ -185,6 +189,43 @@ export default function App() {
 
     return Object.values(agrupado).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
   }, [salidas, stockCalculado]);
+
+  // DATOS PARA GRÁFICO DE BARRAS (Últimos 7 días)
+  const datosGrafico = useMemo(() => {
+    const ultimos7 = ventasAgrupadasPorDia.slice(0, 7).reverse();
+    if (ultimos7.length === 0) return [];
+    const maxVenta = Math.max(...ultimos7.map(d => d.ventasBrutas));
+    return ultimos7.map(d => ({
+      ...d,
+      porcentaje: maxVenta > 0 ? (d.ventasBrutas / maxVenta) * 100 : 0
+    }));
+  }, [ventasAgrupadasPorDia]);
+
+  // FILTROS AVANZADOS DE INVENTARIO
+  const stockFiltradoAvanzado = useMemo(() => {
+    let filtrado = stockCalculado;
+
+    // 1. Filtro de Búsqueda (Texto)
+    if (searchTerm) {
+      filtrado = filtrado.filter(item => item.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || item.sku.toLowerCase().includes(searchTerm.toLowerCase()));
+    }
+    // 2. Filtro Categoría
+    if (exportCategory !== 'Todas') {
+      filtrado = filtrado.filter(item => item.categoria === exportCategory);
+    }
+    // 3. Filtro Marca
+    if (filtroInvMarca !== 'Todas') {
+      filtrado = filtrado.filter(item => item.marca === filtroInvMarca);
+    }
+    // 4. Filtro Estado de Stock
+    if (filtroInvEstado !== 'Todos') {
+      if (filtroInvEstado === 'Agotado') filtrado = filtrado.filter(i => i.stockActual <= 0);
+      if (filtroInvEstado === 'Bajo') filtrado = filtrado.filter(i => i.stockActual > 0 && i.stockActual <= 5);
+      if (filtroInvEstado === 'Suficiente') filtrado = filtrado.filter(i => i.stockActual > 5);
+    }
+
+    return filtrado;
+  }, [stockCalculado, searchTerm, exportCategory, filtroInvMarca, filtroInvEstado]);
 
   // FILTRO DINÁMICO DE HISTORIAL (ESTILO EXCEL SUMATORIA Y ORDEN)
   const salidasFiltradas = useMemo(() => {
@@ -242,11 +283,6 @@ export default function App() {
     return prods.sort((a, b) => b.margenReal - a.margenReal).slice(0, 5);
   }, [stockCalculado]);
 
-  const stockFiltrado = useMemo(() => {
-    if (!searchTerm) return stockCalculado;
-    return stockCalculado.filter(item => item.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || item.sku.toLowerCase().includes(searchTerm.toLowerCase()) || item.marca.toLowerCase().includes(searchTerm.toLowerCase()));
-  }, [stockCalculado, searchTerm]);
-
   const productosFiltradosIngreso = useMemo(() => {
     return productos.filter(p => p.sku.toLowerCase().includes(ingresoSearch.toLowerCase()) || p.nombre.toLowerCase().includes(ingresoSearch.toLowerCase()) || p.marca.toLowerCase().includes(ingresoSearch.toLowerCase()));
   }, [productos, ingresoSearch]);
@@ -258,6 +294,29 @@ export default function App() {
   const categoriasUnicas = useMemo(() => Array.from(new Set(productos.map(p => p.categoria))), [productos]);
   const marcasUnicas = useMemo(() => Array.from(new Set(productos.map(p => p.marca))), [productos]);
   const lotesUnicos = useMemo(() => Array.from(new Set(ingresos.map(i => i.loteId).filter(Boolean))), [ingresos]);
+
+  // KARDEX CALCULATOR PARA MODAL DE DETALLES
+  const kardexProducto = useMemo(() => {
+    if (!viewProductDetails) return [];
+    const movs = [];
+    const targetSku = viewProductDetails.sku;
+    
+    ingresos.filter(i => i.sku === targetSku).forEach(i => movs.push({
+      tipo: 'INGRESO', fecha: i.fechaOperacion || i.createdAt?.toDate().toISOString().split('T')[0],
+      cantidad: i.cantidad, detalle: `Lote: ${i.loteId || 'S/N'}`, user: 'Admin', timestamp: i.createdAt?.toMillis() || 0
+    }));
+    
+    salidas.filter(s => s.sku === targetSku).forEach(s => movs.push({
+      tipo: 'SALIDA', fecha: s.fechaOperacion || s.createdAt?.toDate().toISOString().split('T')[0],
+      cantidad: s.cantidad, detalle: `Venta - ${s.documentoCliente || 'Mostrador'}`, user: s.vendedorEmail ? s.vendedorEmail.split('@')[0] : 'Admin', timestamp: s.createdAt?.toMillis() || 0
+    }));
+
+    return movs.sort((a, b) => {
+      if (a.fecha === b.fecha) return b.timestamp - a.timestamp;
+      return new Date(b.fecha) - new Date(a.fecha);
+    });
+  }, [viewProductDetails, ingresos, salidas]);
+
 
   const showNotif = (msg, type = 'success') => { setNotification({msg, type}); setTimeout(() => setNotification({msg: '', type: ''}), 4000); };
   const handleLoginSubmit = async (e) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password); } catch (error) { showNotif('❌ Correo o contraseña incorrectos', 'error'); } };
@@ -734,11 +793,36 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* NUEVA SECCIÓN ESTILO EXCEL: CIERRE DIARIO */}
+                  {/* NUEVA SECCIÓN ESTILO EXCEL: GRÁFICOS Y CIERRE DIARIO */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    
+                    {/* BUSINESS INTELLIGENCE: Gráfico de Tendencias */}
                     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
-                      <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><CalendarDays className="w-5 h-5 text-blue-500"/> Reporte de Caja por Día</h3>
-                      <div className="overflow-y-auto max-h-[300px] pr-2 flex-1">
+                      <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><Activity className="w-5 h-5 text-indigo-500"/> Ventas: Últimos 7 Días</h3>
+                      <div className="flex-1 flex items-end gap-2 md:gap-4 h-[250px] pt-4 border-b border-slate-200 pb-2">
+                        {datosGrafico.length > 0 ? datosGrafico.map((dia, idx) => (
+                          <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                            {/* Tooltip Hover */}
+                            <div className="opacity-0 group-hover:opacity-100 absolute -top-12 bg-slate-900 text-white text-xs font-bold py-1 px-2 rounded pointer-events-none transition-opacity z-10 whitespace-nowrap">
+                              S/ {dia.ventasBrutas.toFixed(2)}
+                            </div>
+                            <div 
+                              className="w-full bg-indigo-500 rounded-t-sm hover:bg-indigo-400 transition-colors"
+                              style={{ height: `${Math.max(dia.porcentaje, 5)}%` }} // Mínimo 5% visual
+                            ></div>
+                            <span className="text-[10px] font-bold text-slate-400 mt-2 truncate w-full text-center" title={dia.fecha}>
+                              {dia.fecha.split('-').slice(1).join('/')}
+                            </span>
+                          </div>
+                        )) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-400 font-medium">Sin datos para graficar</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
+                      <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><CalendarDays className="w-5 h-5 text-blue-500"/> Reporte de Caja (Tabla Dinámica)</h3>
+                      <div className="overflow-y-auto max-h-[250px] pr-2 flex-1">
                         <table className="w-full text-sm text-left relative">
                           <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm border-b border-slate-200">
                             <tr>
@@ -763,8 +847,10 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-                      <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><Award className="w-5 h-5 text-amber-500"/> Rentabilidad: Top 5 Productos</h3>
+                  </div>
+
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                      <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><Award className="w-5 h-5 text-amber-500"/> Rentabilidad: Top 5 Productos (Mayor Margen)</h3>
                       <div className="space-y-4">
                         {topProductos.map((prod, index) => (
                           <div key={prod.sku} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100 hover:shadow-md transition-shadow gap-3">
@@ -784,7 +870,6 @@ export default function App() {
                         {topProductos.length === 0 && <p className="text-slate-400 text-center py-4">No hay datos suficientes para mostrar.</p>}
                       </div>
                     </div>
-                  </div>
 
                 </div>
               )}
@@ -812,20 +897,58 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- INVENTARIO MAESTRO (ADMIN Y VENDEDOR) --- */}
+              {/* --- INVENTARIO MAESTRO CON FILTROS TIPO EXCEL (ADMIN Y VENDEDOR) --- */}
               {activeTab === 'stock' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
-                  <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-8 gap-6 border-b pb-6">
+                  <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4 border-b pb-6">
                     <div>
                       <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><Package className="text-indigo-600 w-8 h-8" /> Inventario Maestro</h2>
                       {userRole === 'vendedor' && <p className="text-slate-500 text-sm mt-1">Busca stock disponible para ofrecer a los clientes.</p>}
                     </div>
-                    <div className="flex flex-col sm:flex-row items-stretch gap-4 w-full lg:w-auto">
-                      <div className="relative flex-1 sm:min-w-[250px]"><Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" /><input type="text" placeholder="Buscar producto o SKU..." className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-sm" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div>
-                      <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200 shrink-0"><select className="text-sm border-none bg-transparent outline-none font-bold text-slate-600 cursor-pointer pl-2" value={exportCategory} onChange={(e) => setExportCategory(e.target.value)}><option value="Todas">Todo el Inventario</option>{categoriasUnicas.map(cat => <option key={cat} value={cat}>Solo {cat}</option>)}</select><button onClick={handleExportCSV} className="ml-2 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-md transition-colors flex items-center justify-center" title="Descargar CSV"><Download className="w-5 h-5" /></button></div>
-                    </div>
+                    <button onClick={handleExportCSV} className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-lg shadow-md transition-colors flex items-center gap-2 text-sm font-bold"><Download className="w-4 h-4" /> Exportar a Excel</button>
                   </div>
-                  <div className="overflow-auto max-h-[65vh] rounded-xl border border-slate-100">
+
+                  {/* BARRA DE FILTROS AVANZADOS TIPO EXCEL */}
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 flex flex-wrap gap-4 items-center">
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <Filter className="w-4 h-4 text-slate-400" />
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Filtros:</span>
+                    </div>
+                    
+                    <div className="flex flex-1 flex-wrap gap-3">
+                      {/* Búsqueda */}
+                      <div className="relative flex-1 min-w-[200px]">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                        <input type="text" placeholder="Buscar por Nombre o SKU..." className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg outline-none focus:border-indigo-500 text-sm font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                      </div>
+                      
+                      {/* Dropdown Categoría */}
+                      <select className="bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 px-3 py-2 outline-none focus:border-indigo-500 min-w-[140px]" value={exportCategory} onChange={(e) => setExportCategory(e.target.value)}>
+                        <option value="Todas">Todas las Categorías</option>
+                        {categoriasUnicas.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                      </select>
+
+                      {/* Dropdown Marca */}
+                      <select className="bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 px-3 py-2 outline-none focus:border-indigo-500 min-w-[140px]" value={filtroInvMarca} onChange={(e) => setFiltroInvMarca(e.target.value)}>
+                        <option value="Todas">Todas las Marcas</option>
+                        {marcasUnicas.map(m => <option key={m} value={m}>{m}</option>)}
+                      </select>
+
+                      {/* Dropdown Estado */}
+                      <select className="bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 px-3 py-2 outline-none focus:border-indigo-500 min-w-[140px]" value={filtroInvEstado} onChange={(e) => setFiltroInvEstado(e.target.value)}>
+                        <option value="Todos">Cualquier Stock</option>
+                        <option value="Suficiente">Normal (> 5)</option>
+                        <option value="Bajo">Bajo (1 a 5)</option>
+                        <option value="Agotado">Agotado (0)</option>
+                      </select>
+                    </div>
+
+                    {(searchTerm || exportCategory !== 'Todas' || filtroInvMarca !== 'Todas' || filtroInvEstado !== 'Todos') && (
+                      <button onClick={() => {setSearchTerm(''); setExportCategory('Todas'); setFiltroInvMarca('Todas'); setFiltroInvEstado('Todos');}} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors border border-red-100 flex items-center gap-1"><X className="w-3 h-3"/> Limpiar</button>
+                    )}
+                  </div>
+
+                  <div className="overflow-auto max-h-[60vh] rounded-xl border border-slate-100">
                     <table className="min-w-full text-left text-sm whitespace-nowrap relative">
                       <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider text-xs border-b border-slate-200 sticky top-0 z-10 shadow-sm">
                         <tr className="bg-slate-50">
@@ -835,11 +958,11 @@ export default function App() {
                           <th className="p-4 md:p-5 text-center">Salidas</th>
                           <th className="p-4 md:p-5 text-right text-indigo-600">Stock Real</th>
                           {userRole === 'admin' && <th className="p-4 md:p-5 text-right">Costo Promedio</th>}
-                          <th className="p-4 md:p-5 text-center">{userRole === 'admin' ? 'Acciones' : 'Ver'}</th>
+                          <th className="p-4 md:p-5 text-center">{userRole === 'admin' ? 'Auditar' : 'Ver'}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
-                        {stockFiltrado.map(item => (
+                        {stockFiltradoAvanzado.map(item => (
                           <tr key={item.sku} className="hover:bg-slate-50 transition-colors">
                             <td className="p-4 md:p-5 font-mono font-bold text-slate-500">{item.sku}</td>
                             <td className="p-4 md:p-5"><span className="font-bold text-slate-800 block">{item.nombre}</span><div className="flex gap-2 mt-1"><span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-slate-100 rounded text-slate-500">{item.marca}</span><span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-indigo-50 rounded text-indigo-500">{item.categoria}</span></div></td>
@@ -849,17 +972,17 @@ export default function App() {
                             {userRole === 'admin' && <td className="p-4 md:p-5 text-right text-slate-600 font-bold">S/ {item.costoPromedio.toFixed(2)}</td>}
                             
                             <td className="p-4 md:p-5 text-center flex items-center justify-center gap-1">
-                              <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors" title="Ver Detalles"><Eye className="w-5 h-5"/></button>
+                              <button onClick={() => setViewProductDetails(item)} className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg transition-colors flex items-center gap-1" title="Ver Detalles y Kardex"><Eye className="w-5 h-5"/> {userRole === 'admin' && <span className="text-xs font-bold hidden xl:block">Kardex</span>}</button>
                               {userRole === 'admin' && (
                                 <>
-                                  <button onClick={() => setEditingItem({ type: 'productos', id: item.id, data: item })} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar Producto"><Edit2 className="w-5 h-5"/></button>
+                                  <button onClick={() => setEditingItem({ type: 'productos', id: item.id, data: item })} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded-lg transition-colors" title="Editar Nombre/Foto"><Edit2 className="w-5 h-5"/></button>
                                   <button onClick={() => handleDeleteProducto(item.id, item.sku)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-100 rounded-lg transition-colors" title="Eliminar Producto"><Trash2 className="w-5 h-5"/></button>
                                 </>
                               )}
                             </td>
                           </tr>
                         ))}
-                        {stockFiltrado.length === 0 && <tr><td colSpan={userRole === 'admin' ? 7 : 6} className="p-12 text-center text-slate-400 font-medium">No se encontraron productos.</td></tr>}
+                        {stockFiltradoAvanzado.length === 0 && <tr><td colSpan={userRole === 'admin' ? 7 : 6} className="p-12 text-center text-slate-400 font-medium">No se encontraron productos con esos filtros.</td></tr>}
                       </tbody>
                     </table>
                   </div>
@@ -1323,26 +1446,66 @@ export default function App() {
 
           {viewProductDetails && (
             <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-[150] p-4">
-              <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full overflow-hidden relative flex flex-col md:flex-row max-h-[90vh]">
-                <button onClick={() => setViewProductDetails(null)} className="absolute top-4 right-4 bg-black/50 text-white rounded-full p-1 z-10 hover:bg-black transition-colors"><X className="w-6 h-6"/></button>
-                <div className="md:w-1/2 bg-slate-100 flex items-center justify-center min-h-[250px] md:min-h-[400px]">
+              <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full overflow-hidden relative flex flex-col md:flex-row max-h-[90vh]">
+                <button onClick={() => setViewProductDetails(null)} className="absolute top-4 right-4 bg-black/50 text-white rounded-full p-1 z-20 hover:bg-black transition-colors"><X className="w-6 h-6"/></button>
+                
+                <div className="md:w-1/3 bg-slate-100 flex flex-col items-center justify-start p-8 border-r border-slate-200">
                    {viewProductDetails.imagen ? (
-                      <img src={viewProductDetails.imagen} alt={viewProductDetails.nombre} className="w-full h-full object-cover" />
+                      <div className="w-full aspect-square rounded-2xl overflow-hidden mb-6 shadow-md bg-white">
+                        <img src={viewProductDetails.imagen} alt={viewProductDetails.nombre} className="w-full h-full object-cover" />
+                      </div>
                    ) : (
-                      <div className="text-slate-400 flex flex-col items-center"><Camera className="w-16 h-16 mb-2 opacity-50"/> <span>Sin imagen</span></div>
+                      <div className="w-full aspect-square rounded-2xl bg-white border-2 border-dashed border-slate-300 flex flex-col items-center justify-center mb-6 shadow-sm text-slate-400">
+                        <Camera className="w-12 h-12 mb-2 opacity-50"/> <span>Sin imagen</span>
+                      </div>
                    )}
+                   <div className="w-full">
+                     <div className="text-xs font-bold tracking-widest text-indigo-500 mb-1">{viewProductDetails.sku}</div>
+                     <h2 className="text-xl font-black text-slate-900 leading-tight mb-3">{viewProductDetails.nombre}</h2>
+                     <div className="flex flex-wrap gap-2 mb-4">
+                        <span className="bg-slate-200 text-slate-600 px-2 py-1 rounded text-[10px] font-bold uppercase">{viewProductDetails.marca}</span>
+                        <span className="bg-indigo-100 text-indigo-600 px-2 py-1 rounded text-[10px] font-bold uppercase">{viewProductDetails.categoria}</span>
+                     </div>
+                     <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm w-full">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Stock Actual</p>
+                        <p className="text-3xl font-black text-emerald-600">{viewProductDetails.stockActual}</p>
+                     </div>
+                   </div>
                 </div>
-                <div className="md:w-1/2 p-6 md:p-8 flex flex-col justify-center overflow-y-auto">
-                   <div className="text-xs font-bold tracking-widest text-indigo-500 mb-2">{viewProductDetails.sku}</div>
-                   <h2 className="text-2xl font-black text-slate-900 leading-tight mb-3">{viewProductDetails.nombre}</h2>
-                   <div className="flex gap-2 mb-6">
-                      <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-lg text-xs font-bold">{viewProductDetails.marca}</span>
-                      <span className="bg-indigo-50 text-indigo-600 px-3 py-1 rounded-lg text-xs font-bold">{viewProductDetails.categoria}</span>
-                   </div>
-                   <div>
-                      <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Descripción del Producto</h3>
-                      <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">{viewProductDetails.descripcion || 'No se añadió descripción para este artículo.'}</p>
-                   </div>
+
+                <div className="md:w-2/3 flex flex-col bg-white overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
+                    <h3 className="font-black text-slate-800 text-lg flex items-center gap-2"><Activity className="w-5 h-5 text-blue-500"/> Kardex (Historial de Movimientos)</h3>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-6">
+                    <div className="space-y-4">
+                      {kardexProducto.length > 0 ? kardexProducto.map((mov, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-4 bg-white border border-slate-200 rounded-xl hover:shadow-md transition-shadow relative overflow-hidden">
+                          <div className={`absolute left-0 top-0 bottom-0 w-1 ${mov.tipo === 'INGRESO' ? 'bg-blue-500' : 'bg-orange-500'}`}></div>
+                          <div className="flex items-center gap-4 pl-2">
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${mov.tipo === 'INGRESO' ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
+                              {mov.tipo === 'INGRESO' ? <TrendingDown className="w-5 h-5"/> : <TrendingUp className="w-5 h-5"/>}
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-800">{mov.tipo === 'INGRESO' ? 'Entrada de Lote' : 'Venta Registrada'}</p>
+                              <p className="text-xs text-slate-500 font-mono mt-0.5">{mov.fecha} • {mov.detalle}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className={`font-black text-lg ${mov.tipo === 'INGRESO' ? 'text-blue-600' : 'text-orange-500'}`}>
+                              {mov.tipo === 'INGRESO' ? '+' : '-'}{mov.cantidad}
+                            </p>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase bg-slate-100 px-2 py-0.5 rounded mt-1 inline-block">Usuario: {mov.user}</p>
+                          </div>
+                        </div>
+                      )) : (
+                        <div className="text-center py-12 text-slate-400 flex flex-col items-center">
+                          <Package className="w-12 h-12 mb-3 opacity-20"/>
+                          <p className="font-medium">Aún no hay movimientos registrados para este SKU.</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
