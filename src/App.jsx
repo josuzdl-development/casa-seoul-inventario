@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc, setDoc } from 'firebase/firestore';
 import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, CalendarDays, Filter, Settings, Activity } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
@@ -40,6 +40,7 @@ export default function App() {
   const [productos, setProductos] = useState([]);
   const [ingresos, setIngresos] = useState([]);
   const [salidas, setSalidas] = useState([]);
+  const [permisosRoles, setPermisosRoles] = useState({}); // NUEVO ESTADO DE SEGURIDAD
   const [notification, setNotification] = useState({ msg: '', type: '' });
 
   // FORM STATES Y BUSCADORES
@@ -117,10 +118,20 @@ export default function App() {
       setSalidas(data);
     });
 
-    return () => { unsubProductos(); unsubIngresos(); unsubSalidas(); };
+    // NUEVO LISTENER DE PERMISOS Y SEGURIDAD
+    const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'configuraciones', 'permisos_roles');
+    const unsubConfig = onSnapshot(configRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setPermisosRoles(docSnap.data());
+      } else {
+        setPermisosRoles({});
+      }
+    });
+
+    return () => { unsubProductos(); unsubIngresos(); unsubSalidas(); unsubConfig(); };
   }, [firebaseUser]);
 
-  // --- CÁLCULOS MAESTROS ESTILO EXCEL ---
+  // --- CÁLCULOS MAESTROS ESTILO EXCEL Y MOTOR DE SEGURIDAD ---
   const stockCalculado = useMemo(() => {
     const stockMap = {};
     productos.forEach(prod => { stockMap[prod.sku] = { ...prod, totalIngresos: 0, totalSalidas: 0, stockActual: 0, costoPromedio: 0, valorTotal: 0, ventasGeneradas: 0 }; });
@@ -144,9 +155,16 @@ export default function App() {
     });
 
     let finalStock = Object.values(stockMap);
-    if (userRole === 'socio') finalStock = finalStock.filter(item => item.categoria !== 'Tecnología');
+    
+    // FILTRO DE SEGURIDAD DINÁMICO
+    if (userRole === 'socio') {
+      finalStock = finalStock.filter(item => permisosRoles[item.categoria]?.socio !== false);
+    } else if (userRole === 'vendedor') {
+      finalStock = finalStock.filter(item => permisosRoles[item.categoria]?.vendedor !== false);
+    }
+    
     return finalStock;
-  }, [ingresos, salidas, userRole, productos]);
+  }, [ingresos, salidas, userRole, productos, permisosRoles]);
 
   const alertasStock = useMemo(() => {
     const agotados = stockCalculado.filter(p => p.stockActual <= 0 && p.totalIngresos > 0);
@@ -205,19 +223,15 @@ export default function App() {
   const stockFiltradoAvanzado = useMemo(() => {
     let filtrado = stockCalculado;
 
-    // 1. Filtro de Búsqueda (Texto)
     if (searchTerm) {
       filtrado = filtrado.filter(item => item.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || item.sku.toLowerCase().includes(searchTerm.toLowerCase()));
     }
-    // 2. Filtro Categoría
     if (exportCategory !== 'Todas') {
       filtrado = filtrado.filter(item => item.categoria === exportCategory);
     }
-    // 3. Filtro Marca
     if (filtroInvMarca !== 'Todas') {
       filtrado = filtrado.filter(item => item.marca === filtroInvMarca);
     }
-    // 4. Filtro Estado de Stock
     if (filtroInvEstado !== 'Todos') {
       if (filtroInvEstado === 'Agotado') filtrado = filtrado.filter(i => i.stockActual <= 0);
       if (filtroInvEstado === 'Bajo') filtrado = filtrado.filter(i => i.stockActual > 0 && i.stockActual <= 5);
@@ -227,7 +241,7 @@ export default function App() {
     return filtrado;
   }, [stockCalculado, searchTerm, exportCategory, filtroInvMarca, filtroInvEstado]);
 
-  // FILTRO DINÁMICO DE HISTORIAL (ESTILO EXCEL SUMATORIA Y ORDEN)
+  // FILTRO DINÁMICO DE HISTORIAL
   const salidasFiltradas = useMemo(() => {
     let filtradas = salidas.filter(s => {
       const fechaVal = s.fechaOperacion || (s.createdAt ? new Date(s.createdAt.toMillis() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0] : '');
@@ -536,6 +550,29 @@ export default function App() {
     } catch (error) { showNotif('❌ Error', 'error'); }
   };
 
+  // --- LÓGICA DE SEGURIDAD: TOGGLE DE PERMISOS ---
+  const handleTogglePermiso = async (categoria, rol) => {
+    if (!firebaseUser || !db || userRole !== 'admin') return;
+    
+    // Por defecto asume true si no existe en la base de datos
+    const currentVal = permisosRoles[categoria]?.[rol] ?? true;
+    
+    const newState = {
+      ...permisosRoles,
+      [categoria]: {
+        ...(permisosRoles[categoria] || { socio: true, vendedor: true }),
+        [rol]: !currentVal
+      }
+    };
+
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'configuraciones', 'permisos_roles'), newState);
+      showNotif(`✅ Visibilidad actualizada para ${categoria}`);
+    } catch (error) {
+      showNotif('❌ Error al guardar permisos', 'error');
+    }
+  };
+
   const handlePrintReceipt = () => { window.print(); };
 
   // --- LÓGICA MODO ESCÁNER POS ---
@@ -667,6 +704,7 @@ export default function App() {
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Ajustes de Sistema</p>
                 <button onClick={() => changeTab('catalogo')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'catalogo' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Tags className="w-5 h-5" /> Catálogo Base</button>
                 <button onClick={() => changeTab('importar')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'importar' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><UploadCloud className="w-5 h-5" /> Carga Masiva (Excel)</button>
+                <button onClick={() => changeTab('seguridad')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'seguridad' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><ShieldCheck className="w-5 h-5" /> Seguridad y Accesos</button>
               </>
             )}
 
@@ -1343,6 +1381,71 @@ export default function App() {
                         </table>
                       </div>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* --- PANEL DE SEGURIDAD Y PERMISOS (NUEVO - SOLO ADMIN) --- */}
+              {activeTab === 'seguridad' && userRole === 'admin' && (
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8 animate-in fade-in">
+                  <div className="mb-8 border-b pb-6">
+                    <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><ShieldCheck className="text-indigo-600 w-8 h-8" /> Panel de Seguridad y Accesos</h2>
+                    <p className="text-slate-500 text-sm mt-2">Controla qué categorías de productos pueden ver tus empleados y socios internacionales.</p>
+                  </div>
+                  
+                  <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-8 flex gap-3 items-start text-sm text-indigo-800">
+                    <Info className="w-5 h-5 shrink-0 mt-0.5 text-indigo-500" />
+                    <div>
+                      <strong className="block mb-1 font-black">¿Cómo funciona esto?</strong>
+                      Por defecto, todas las categorías son visibles para todo el mundo. Si apagas el interruptor de "Vendedores", esa categoría de productos desaparecerá instantáneamente del Punto de Venta. Si apagas el de "Socio (Corea)", ya no la verán en su Dashboard internacional.
+                    </div>
+                  </div>
+
+                  <div className="overflow-auto max-h-[60vh] rounded-xl border border-slate-200">
+                    <table className="min-w-full text-left text-sm whitespace-nowrap">
+                      <thead className="bg-slate-100 text-slate-600 font-bold uppercase tracking-wider text-xs sticky top-0 z-10 shadow-sm border-b border-slate-200">
+                        <tr>
+                          <th className="p-5 w-1/2">Categoría en el Catálogo</th>
+                          <th className="p-5 text-center">Visible para Vendedores (Tienda)</th>
+                          <th className="p-5 text-center">Visible para Socios (Corea)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {categoriasUnicas.map(cat => {
+                          const isVendedorVisible = permisosRoles[cat]?.vendedor !== false;
+                          const isSocioVisible = permisosRoles[cat]?.socio !== false;
+
+                          return (
+                            <tr key={cat} className="hover:bg-slate-50 transition-colors">
+                              <td className="p-5 font-black text-slate-800 text-base">{cat}</td>
+                              
+                              <td className="p-5">
+                                <div className="flex justify-center items-center">
+                                  <button
+                                    onClick={() => handleTogglePermiso(cat, 'vendedor')}
+                                    className={`w-14 h-7 rounded-full flex items-center transition-colors p-1 focus:outline-none ${isVendedorVisible ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                                  >
+                                    <div className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform duration-300 ${isVendedorVisible ? 'translate-x-7' : 'translate-x-0'}`}></div>
+                                  </button>
+                                </div>
+                              </td>
+
+                              <td className="p-5">
+                                <div className="flex justify-center items-center">
+                                  <button
+                                    onClick={() => handleTogglePermiso(cat, 'socio')}
+                                    className={`w-14 h-7 rounded-full flex items-center transition-colors p-1 focus:outline-none ${isSocioVisible ? 'bg-blue-500' : 'bg-slate-300'}`}
+                                  >
+                                    <div className={`w-5 h-5 bg-white rounded-full shadow-md transform transition-transform duration-300 ${isSocioVisible ? 'translate-x-7' : 'translate-x-0'}`}></div>
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {categoriasUnicas.length === 0 && <tr><td colSpan="3" className="p-12 text-center text-slate-400 font-medium">No hay categorías creadas en el catálogo todavía.</td></tr>}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
