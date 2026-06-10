@@ -3,7 +3,7 @@ import './index.css';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, serverTimestamp, doc, deleteDoc, updateDoc, setDoc } from 'firebase/firestore';
-import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, CalendarDays, Filter, Settings, Activity } from 'lucide-react';
+import { Package, TrendingDown, TrendingUp, BarChart3, Globe2, ShieldCheck, Calculator, Download, LogOut, Lock, Edit2, Trash2, X, Tags, Menu, Search, Info, PieChart, Users, Printer, Eye, Camera, UploadCloud, FileText, AlertCircle, Award, Bell, AlertTriangle, ScanLine, CalendarDays, Filter, Settings, Activity, Plus } from 'lucide-react';
 
 // --- CONFIGURACIÓN DE FIREBASE ---
 let app, auth, db, appId;
@@ -40,24 +40,31 @@ export default function App() {
   const [productos, setProductos] = useState([]);
   const [ingresos, setIngresos] = useState([]);
   const [salidas, setSalidas] = useState([]);
-  const [permisosRoles, setPermisosRoles] = useState({}); // NUEVO ESTADO DE SEGURIDAD
+  const [permisosRoles, setPermisosRoles] = useState({});
   const [notification, setNotification] = useState({ msg: '', type: '' });
 
   // FORM STATES Y BUSCADORES
   const [formProducto, setFormProducto] = useState({ 
     nombre: '', categoriaSelect: '', categoriaNueva: '', marcaSelect: '', marcaNueva: '', descripcion: '', imagen: '' 
   });
-  const [formIngreso, setFormIngreso] = useState({ loteSelect: '', loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', fechaOperacion: '' });
+  
   const [formSalida, setFormSalida] = useState({ sku: '', cantidad: '', precioTotal: '', canalVenta: '', metodoPago: '', comprobante: '', documentoCliente: '', montoRecibido: '', fechaOperacion: '' });
   
   const [editingItem, setEditingItem] = useState(null);
   const [receiptItem, setReceiptItem] = useState(null);
   const [viewProductDetails, setViewProductDetails] = useState(null); 
   
-  const [ingresoSearch, setIngresoSearch] = useState('');
-  const [showIngresoDropdown, setShowIngresoDropdown] = useState(false);
   const [salidaSearch, setSalidaSearch] = useState('');
   const [showSalidaDropdown, setShowSalidaDropdown] = useState(false);
+
+  // --- NUEVOS ESTADOS PARA MOTOR DE IMPORTACIONES (LOTE) ---
+  const [loteGlobal, setLoteGlobal] = useState({
+    loteIdSelect: '', loteIdNuevo: '', fechaOperacion: '', tipoCambio: '3.750', fleteTotalUSD: '', aduanasTotalUSD: '', igvTotalUSD: ''
+  });
+  const [loteItems, setLoteItems] = useState([]);
+  const [loteItemForm, setLoteItemForm] = useState({ sku: '', cantidad: '', fobUnitarioUSD: '', margen: '30' });
+  const [ingresoSearch, setIngresoSearch] = useState('');
+  const [showIngresoDropdown, setShowIngresoDropdown] = useState(false);
 
   // ESTADOS PARA IMPORTACIÓN Y FILTROS ESTILO EXCEL
   const [csvPreview, setCsvPreview] = useState([]);
@@ -68,7 +75,7 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [exportCategory, setExportCategory] = useState('Todas');
   const [filtroInvMarca, setFiltroInvMarca] = useState('Todas');
-  const [filtroInvEstado, setFiltroInvEstado] = useState('Todos'); // 'Todos', 'Agotado', 'Bajo', 'Suficiente'
+  const [filtroInvEstado, setFiltroInvEstado] = useState('Todos');
 
   const [filtroFechaInicio, setFiltroFechaInicio] = useState('');
   const [filtroFechaFin, setFiltroFechaFin] = useState('');
@@ -77,14 +84,25 @@ export default function App() {
   // REFERENCIAS PARA MODO POS (ESCANER)
   const scannerInputRef = useRef(null);
 
-  // --- 1. AUTENTICACIÓN Y MOTOR DE ROLES ---
+  // --- OBTENER TIPO DE CAMBIO EN TIEMPO REAL ---
+  useEffect(() => {
+    fetch('https://open.er-api.com/v6/latest/USD')
+      .then(res => res.json())
+      .then(data => {
+        if (data?.rates?.PEN) {
+          setLoteGlobal(prev => ({ ...prev, tipoCambio: data.rates.PEN.toFixed(3) }));
+        }
+      })
+      .catch(err => console.log('Error al obtener TC', err));
+  }, []);
+
+  // --- AUTENTICACIÓN Y MOTOR DE ROLES ---
   useEffect(() => {
     if (!auth) return;
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
       if (user) {
         const email = user.email?.toLowerCase() || '';
-        
         if (email.includes('socio') || email.includes('korea') || email.includes('invitado')) {
           setUserRole('socio'); setIsKoreaView(true);
         } else if (email.includes('vendedor') || email.includes('tienda')) {
@@ -118,14 +136,10 @@ export default function App() {
       setSalidas(data);
     });
 
-    // NUEVO LISTENER DE PERMISOS Y SEGURIDAD
     const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'configuraciones', 'permisos_roles');
     const unsubConfig = onSnapshot(configRef, (docSnap) => {
-      if (docSnap.exists()) {
-        setPermisosRoles(docSnap.data());
-      } else {
-        setPermisosRoles({});
-      }
+      if (docSnap.exists()) setPermisosRoles(docSnap.data());
+      else setPermisosRoles({});
     });
 
     return () => { unsubProductos(); unsubIngresos(); unsubSalidas(); unsubConfig(); };
@@ -155,14 +169,8 @@ export default function App() {
     });
 
     let finalStock = Object.values(stockMap);
-    
-    // FILTRO DE SEGURIDAD DINÁMICO
-    if (userRole === 'socio') {
-      finalStock = finalStock.filter(item => permisosRoles[item.categoria]?.socio !== false);
-    } else if (userRole === 'vendedor') {
-      finalStock = finalStock.filter(item => permisosRoles[item.categoria]?.vendedor !== false);
-    }
-    
+    if (userRole === 'socio') finalStock = finalStock.filter(item => permisosRoles[item.categoria]?.socio !== false);
+    else if (userRole === 'vendedor') finalStock = finalStock.filter(item => permisosRoles[item.categoria]?.vendedor !== false);
     return finalStock;
   }, [ingresos, salidas, userRole, productos, permisosRoles]);
 
@@ -184,15 +192,11 @@ export default function App() {
     return { totalVentas, gananciaBruta: totalVentas - totalCostoVendido, valorInventario, unidadesVendidas };
   }, [salidas, stockCalculado]);
 
-  // CÁLCULO ESTILO TABLA DINÁMICA: AGRUPACIÓN POR DÍAS (PARA TABLA Y GRÁFICO)
   const ventasAgrupadasPorDia = useMemo(() => {
     const agrupado = {};
     salidas.forEach(sal => {
       const fechaBase = sal.fechaOperacion || (sal.createdAt ? new Date(sal.createdAt.toMillis() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0] : 'Sin Fecha');
-      
-      if (!agrupado[fechaBase]) {
-        agrupado[fechaBase] = { fecha: fechaBase, ventasBrutas: 0, costoTotal: 0, unidades: 0, transacciones: 0 };
-      }
+      if (!agrupado[fechaBase]) agrupado[fechaBase] = { fecha: fechaBase, ventasBrutas: 0, costoTotal: 0, unidades: 0, transacciones: 0 };
       
       const ventaMonto = Number(sal.precioTotal || 0);
       const cant = Number(sal.cantidad || 0);
@@ -204,44 +208,29 @@ export default function App() {
       agrupado[fechaBase].transacciones += 1;
       agrupado[fechaBase].gananciaNeta = agrupado[fechaBase].ventasBrutas - agrupado[fechaBase].costoTotal;
     });
-
     return Object.values(agrupado).sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
   }, [salidas, stockCalculado]);
 
-  // DATOS PARA GRÁFICO DE BARRAS (Últimos 7 días)
   const datosGrafico = useMemo(() => {
     const ultimos7 = ventasAgrupadasPorDia.slice(0, 7).reverse();
     if (ultimos7.length === 0) return [];
     const maxVenta = Math.max(...ultimos7.map(d => d.ventasBrutas));
-    return ultimos7.map(d => ({
-      ...d,
-      porcentaje: maxVenta > 0 ? (d.ventasBrutas / maxVenta) * 100 : 0
-    }));
+    return ultimos7.map(d => ({ ...d, porcentaje: maxVenta > 0 ? (d.ventasBrutas / maxVenta) * 100 : 0 }));
   }, [ventasAgrupadasPorDia]);
 
-  // FILTROS AVANZADOS DE INVENTARIO
   const stockFiltradoAvanzado = useMemo(() => {
     let filtrado = stockCalculado;
-
-    if (searchTerm) {
-      filtrado = filtrado.filter(item => item.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || item.sku.toLowerCase().includes(searchTerm.toLowerCase()));
-    }
-    if (exportCategory !== 'Todas') {
-      filtrado = filtrado.filter(item => item.categoria === exportCategory);
-    }
-    if (filtroInvMarca !== 'Todas') {
-      filtrado = filtrado.filter(item => item.marca === filtroInvMarca);
-    }
+    if (searchTerm) filtrado = filtrado.filter(item => item.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || item.sku.toLowerCase().includes(searchTerm.toLowerCase()));
+    if (exportCategory !== 'Todas') filtrado = filtrado.filter(item => item.categoria === exportCategory);
+    if (filtroInvMarca !== 'Todas') filtrado = filtrado.filter(item => item.marca === filtroInvMarca);
     if (filtroInvEstado !== 'Todos') {
       if (filtroInvEstado === 'Agotado') filtrado = filtrado.filter(i => i.stockActual <= 0);
       if (filtroInvEstado === 'Bajo') filtrado = filtrado.filter(i => i.stockActual > 0 && i.stockActual <= 5);
       if (filtroInvEstado === 'Suficiente') filtrado = filtrado.filter(i => i.stockActual > 5);
     }
-
     return filtrado;
   }, [stockCalculado, searchTerm, exportCategory, filtroInvMarca, filtroInvEstado]);
 
-  // FILTRO DINÁMICO DE HISTORIAL
   const salidasFiltradas = useMemo(() => {
     let filtradas = salidas.filter(s => {
       const fechaVal = s.fechaOperacion || (s.createdAt ? new Date(s.createdAt.toMillis() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0] : '');
@@ -309,7 +298,7 @@ export default function App() {
   const marcasUnicas = useMemo(() => Array.from(new Set(productos.map(p => p.marca))), [productos]);
   const lotesUnicos = useMemo(() => Array.from(new Set(ingresos.map(i => i.loteId).filter(Boolean))), [ingresos]);
 
-  // KARDEX CALCULATOR PARA MODAL DE DETALLES
+  // KARDEX CALCULATOR
   const kardexProducto = useMemo(() => {
     if (!viewProductDetails) return [];
     const movs = [];
@@ -332,12 +321,42 @@ export default function App() {
   }, [viewProductDetails, ingresos, salidas]);
 
 
+  // --- MOTOR DE PRORRATEO (LOTE) ---
+  const loteCalculado = useMemo(() => {
+    const tc = Number(loteGlobal.tipoCambio) || 1;
+    const fleteGlobal = Number(loteGlobal.fleteTotalUSD) || 0;
+    const aduanasGlobal = Number(loteGlobal.aduanasTotalUSD) || 0;
+    const igvGlobal = Number(loteGlobal.igvTotalUSD) || 0;
+
+    const totalFobUSD = loteItems.reduce((acc, item) => acc + (Number(item.cantidad) * Number(item.fobUnitarioUSD)), 0);
+
+    return loteItems.map(item => {
+       const pObj = productos.find(p => p.sku === item.sku);
+       const rowFobUSD = Number(item.cantidad) * Number(item.fobUnitarioUSD);
+       const proporcion = totalFobUSD > 0 ? rowFobUSD / totalFobUSD : 0;
+
+       const rowFleteUSD = fleteGlobal * proporcion;
+       const rowAduanasUSD = aduanasGlobal * proporcion;
+       const rowIgvUSD = igvGlobal * proporcion;
+
+       const rowTotalUSD = rowFobUSD + rowFleteUSD + rowAduanasUSD + rowIgvUSD;
+       const unitCostUSD = rowTotalUSD / Number(item.cantidad);
+       
+       const unitCostPEN = unitCostUSD * tc;
+       const rowTotalPEN = rowTotalUSD * tc;
+
+       const precioSugerido = unitCostPEN * (1 + (Number(item.margen) / 100));
+
+       return { ...item, nombre: pObj?.nombre || item.sku, rowFobUSD, unitCostUSD, unitCostPEN, rowTotalPEN, precioSugerido, proporcion };
+    });
+  }, [loteGlobal, loteItems, productos]);
+
+
   const showNotif = (msg, type = 'success') => { setNotification({msg, type}); setTimeout(() => setNotification({msg: '', type: ''}), 4000); };
   const handleLoginSubmit = async (e) => { e.preventDefault(); try { await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password); } catch (error) { showNotif('❌ Correo o contraseña incorrectos', 'error'); } };
   const handleLogout = async () => { try { await signOut(auth); setLoginForm({ email: '', password: '' }); } catch (error) { console.error(error); } };
   const changeTab = (tab) => { setActiveTab(tab); setIsSidebarOpen(false); };
 
-  // --- LÓGICA DE EXPORTACIÓN ---
   const handleExportCSV = () => {
     let dataToExport = exportCategory !== 'Todas' ? stockCalculado.filter(i => i.categoria === exportCategory) : stockCalculado;
     const headers = ['SKU', 'Producto', 'Categoria', 'Marca', 'Ingresos', 'Salidas', 'Stock_Actual', 'Costo_Promedio_Soles', 'Valor_Inventario_Soles'];
@@ -380,7 +399,6 @@ export default function App() {
       const text = event.target.result;
       const rows = text.split(/\r?\n/);
       const parsedData = [];
-      
       let comaCount = 0; let puntoComaCount = 0; let tabCount = 0;
       const linesToCheck = Math.min(rows.length, 6);
       for(let i=1; i < linesToCheck; i++){
@@ -451,7 +469,6 @@ export default function App() {
     } catch (error) { showNotif('❌ Error en importación', 'error'); } finally { setIsImporting(false); }
   };
 
-  // --- ACCIONES DE GUARDADO INDIVIDUAL ---
   const handleGuardarProducto = async (e) => {
     e.preventDefault();
     if (!firebaseUser || !db) return;
@@ -478,23 +495,50 @@ export default function App() {
     } catch (error) { showNotif('❌ Error al guardar', 'error'); }
   };
 
-  const handleGuardarIngreso = async (e) => {
+  // --- LÓGICA DE AGREGAR ITEM AL LOTE ---
+  const handleAddLoteItem = (e) => {
     e.preventDefault();
+    if (!loteItemForm.sku || !loteItemForm.cantidad || !loteItemForm.fobUnitarioUSD) return showNotif('❌ Completa SKU, Cantidad y FOB Unitario', 'error');
+    setLoteItems([...loteItems, { ...loteItemForm, id: Date.now() }]);
+    setLoteItemForm({ sku: '', cantidad: '', fobUnitarioUSD: '', margen: '30' });
+    setIngresoSearch('');
+  };
+
+  const handleRemoveLoteItem = (id) => setLoteItems(loteItems.filter(i => i.id !== id));
+
+  // --- GUARDADO FINAL DEL LOTE PRORRATEADO ---
+  const handleGuardarIngresoLote = async () => {
     if (!firebaseUser || !db || userRole !== 'admin') return showNotif('❌ Solo los admins pueden ingresar mercadería', 'error');
-    const finalLoteId = formIngreso.loteSelect === '+ Nuevo Lote' ? formIngreso.loteNuevo.trim().toUpperCase() : formIngreso.loteSelect;
-    if (!finalLoteId || !formIngreso.sku) return showNotif('❌ Revisa el Lote y el SKU', 'error');
+    
+    const finalLoteId = loteGlobal.loteIdSelect === '+ Nuevo Lote' ? loteGlobal.loteIdNuevo.trim().toUpperCase() : loteGlobal.loteIdSelect;
+    if (!finalLoteId) return showNotif('❌ Revisa el Lote', 'error');
+    if (loteItems.length === 0) return showNotif('❌ Agrega al menos un producto', 'error');
 
-    const cFob = Number(formIngreso.costoFob || 0); const cFlete = Number(formIngreso.flete || 0); const cAduanas = Number(formIngreso.aduanas || 0); const qty = Number(formIngreso.cantidad || 1);
-    const costoTotalLote = cFob + cFlete + cAduanas; const costoUnitarioReal = costoTotalLote / qty;
-
+    const tc = Number(loteGlobal.tipoCambio) || 1;
+    const fleteGlobal = Number(loteGlobal.fleteTotalUSD) || 0;
+    const aduanasGlobal = Number(loteGlobal.aduanasTotalUSD) || 0;
+    const igvGlobal = Number(loteGlobal.igvTotalUSD) || 0;
+    
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
-        loteId: finalLoteId, sku: formIngreso.sku, cantidad: formIngreso.cantidad, costoFob: formIngreso.costoFob, flete: formIngreso.flete, aduanas: formIngreso.aduanas, igv: formIngreso.igv, costoTotalLote, costoUnitarioReal, fechaOperacion: formIngreso.fechaOperacion, createdAt: serverTimestamp()
-      });
-      showNotif('✅ Ingreso registrado');
-      setFormIngreso({ loteSelect: finalLoteId, loteNuevo: '', sku: '', cantidad: '', costoFob: '', flete: '', aduanas: '', igv: '', fechaOperacion: '' });
-      setIngresoSearch('');
-    } catch (error) { showNotif('❌ Error al guardar', 'error'); }
+      for (const calcItem of loteCalculado) {
+        const cFletePEN = (fleteGlobal * calcItem.proporcion) * tc;
+        const cAduanasPEN = (aduanasGlobal * calcItem.proporcion) * tc;
+        const cIgvPEN = (igvGlobal * calcItem.proporcion) * tc;
+        const cFobPEN = calcItem.rowFobUSD * tc;
+
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'ingresos'), {
+          loteId: finalLoteId, sku: calcItem.sku, cantidad: Number(calcItem.cantidad),
+          costoFob: cFobPEN, flete: cFletePEN, aduanas: cAduanasPEN, igv: cIgvPEN,
+          costoTotalLote: calcItem.rowTotalPEN, costoUnitarioReal: calcItem.unitCostPEN, 
+          fechaOperacion: loteGlobal.fechaOperacion, createdAt: serverTimestamp()
+        });
+      }
+      showNotif('✅ Lote registrado e inventario actualizado');
+      setLoteGlobal({ loteIdSelect: '', loteIdNuevo: '', fechaOperacion: '', tipoCambio: loteGlobal.tipoCambio, fleteTotalUSD: '', aduanasTotalUSD: '', igvTotalUSD: '' });
+      setLoteItems([]);
+    } catch (error) { 
+      showNotif('❌ Error al guardar lote', 'error'); 
+    }
   };
 
   const handleGuardarSalida = async (e) => {
@@ -508,7 +552,7 @@ export default function App() {
 
     try {
       const dataToSave = { ...formSalida };
-      delete dataToSave.montoRecibido; // Evita ensuciar la base de datos
+      delete dataToSave.montoRecibido;
 
       const result = await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'salidas'), { ...dataToSave, vendedorEmail: firebaseUser.email, createdAt: serverTimestamp() });
       showNotif('✅ Venta registrada exitosamente');
@@ -518,7 +562,6 @@ export default function App() {
     } catch (error) { showNotif('❌ Error al registrar venta', 'error'); }
   };
 
-  // CANDADO DE SEGURIDAD PARA BORRAR
   const handleDeleteProducto = (id, sku) => {
     if (userRole !== 'admin') return showNotif('❌ Solo administradores pueden borrar.', 'error');
     const tieneHistorial = ingresos.some(i => i.sku === sku) || salidas.some(s => s.sku === sku);
@@ -550,13 +593,9 @@ export default function App() {
     } catch (error) { showNotif('❌ Error', 'error'); }
   };
 
-  // --- LÓGICA DE SEGURIDAD: TOGGLE DE PERMISOS ---
   const handleTogglePermiso = async (categoria, rol) => {
     if (!firebaseUser || !db || userRole !== 'admin') return;
-    
-    // Por defecto asume true si no existe en la base de datos
     const currentVal = permisosRoles[categoria]?.[rol] ?? true;
-    
     const newState = {
       ...permisosRoles,
       [categoria]: {
@@ -564,7 +603,6 @@ export default function App() {
         [rol]: !currentVal
       }
     };
-
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'configuraciones', 'permisos_roles'), newState);
       showNotif(`✅ Visibilidad actualizada para ${categoria}`);
@@ -575,7 +613,6 @@ export default function App() {
 
   const handlePrintReceipt = () => { window.print(); };
 
-  // --- LÓGICA MODO ESCÁNER POS ---
   const handleBarcodeScan = (e) => {
     if (e.key === 'Enter') {
       e.preventDefault(); 
@@ -597,9 +634,6 @@ export default function App() {
     }
   };
 
-  // ==========================
-  // RENDER: PANTALLA LOGIN
-  // ==========================
   if (!userRole) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 font-sans">
@@ -626,9 +660,6 @@ export default function App() {
     );
   }
 
-  // ==========================
-  // RENDER: VISTA COREA (SOCIO)
-  // ==========================
   const renderVistaCorea = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4 border-b pb-6">
@@ -664,16 +695,11 @@ export default function App() {
     </div>
   );
 
-  // ==========================
-  // MAIN APP RENDER
-  // ==========================
   return (
     <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 overflow-hidden">
       {isSidebarOpen && <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
 
-      {/* --- SIDEBAR PARA ADMINS Y VENDEDORES --- */}
-      {userRole !== 'socio' && !isKoreaView && (
-        <aside className={`fixed md:static inset-y-0 left-0 z-50 w-72 bg-slate-900 text-white flex flex-col transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none print:hidden`}>
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-72 bg-slate-900 text-white flex flex-col transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out shadow-2xl md:shadow-none print:hidden`}>
           <div className="p-6 md:p-8 flex justify-between items-center">
             <div>
               <h1 className="text-2xl font-black tracking-tighter text-white flex items-center gap-2">CASA SEOUL</h1>
@@ -686,7 +712,6 @@ export default function App() {
           
           <nav className="flex-1 px-4 space-y-1.5 mt-2 overflow-y-auto pb-6">
             
-            {/* VISTA REORGANIZADA PARA ADMIN */}
             {userRole === 'admin' && (
               <>
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Principal</p>
@@ -699,7 +724,7 @@ export default function App() {
 
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Inventario</p>
                 <button onClick={() => changeTab('stock')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'stock' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Package className="w-5 h-5" /> Stock en Tiempo Real</button>
-                <button onClick={() => changeTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingDown className="w-5 h-5" /> Ingresar Mercadería</button>
+                <button onClick={() => changeTab('ingreso')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'ingreso' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><TrendingDown className="w-5 h-5" /> Importar Mercadería</button>
 
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-6">Ajustes de Sistema</p>
                 <button onClick={() => changeTab('catalogo')} className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'catalogo' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}><Tags className="w-5 h-5" /> Catálogo Base</button>
@@ -708,7 +733,6 @@ export default function App() {
               </>
             )}
 
-            {/* VISTA REORGANIZADA PARA VENDEDOR */}
             {userRole === 'vendedor' && (
               <>
                 <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 mt-2">Caja y Ventas</p>
@@ -731,9 +755,7 @@ export default function App() {
              <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-slate-800 text-sm font-medium text-slate-300 hover:bg-red-500 hover:text-white transition-colors"><LogOut className="w-4 h-4" /> Cerrar Sesión</button>
           </div>
         </aside>
-      )}
 
-      {/* --- CABECERA SUPERIOR --- */}
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm print:hidden">
           <div className="flex items-center gap-4">
@@ -753,10 +775,8 @@ export default function App() {
           </div>
         </header>
 
-        {/* ÁREA DE TRABAJO SCROLLEABLE */}
         <div className="flex-1 overflow-y-auto p-4 md:p-8 relative print:p-0 print:overflow-visible">
           
-          {/* NOTIFICACIÓN FLOTANTE */}
           {notification.msg && <div className={`fixed bottom-6 right-6 md:left-1/2 md:transform md:-translate-x-1/2 px-6 py-4 rounded-2xl shadow-2xl font-bold z-50 flex items-center gap-3 animate-in slide-in-from-bottom-5 print:hidden ${notification.type === 'error' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'}`}>
              {notification.type === 'error' ? <AlertCircle className="w-5 h-5"/> : <ShieldCheck className="w-5 h-5"/>} {notification.msg}
           </div>}
@@ -831,26 +851,17 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* NUEVA SECCIÓN ESTILO EXCEL: GRÁFICOS Y CIERRE DIARIO */}
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    
-                    {/* BUSINESS INTELLIGENCE: Gráfico de Tendencias */}
                     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col">
                       <h3 className="text-lg font-black text-slate-800 mb-6 flex items-center gap-2"><Activity className="w-5 h-5 text-indigo-500"/> Ventas: Últimos 7 Días</h3>
                       <div className="flex-1 flex items-end gap-2 md:gap-4 h-[250px] pt-4 border-b border-slate-200 pb-2">
                         {datosGrafico.length > 0 ? datosGrafico.map((dia, idx) => (
                           <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full group relative">
-                            {/* Tooltip Hover */}
                             <div className="opacity-0 group-hover:opacity-100 absolute -top-12 bg-slate-900 text-white text-xs font-bold py-1 px-2 rounded pointer-events-none transition-opacity z-10 whitespace-nowrap">
                               S/ {dia.ventasBrutas.toFixed(2)}
                             </div>
-                            <div 
-                              className="w-full bg-indigo-500 rounded-t-sm hover:bg-indigo-400 transition-colors"
-                              style={{ height: `${Math.max(dia.porcentaje, 5)}%` }} // Mínimo 5% visual
-                            ></div>
-                            <span className="text-[10px] font-bold text-slate-400 mt-2 truncate w-full text-center" title={dia.fecha}>
-                              {dia.fecha.split('-').slice(1).join('/')}
-                            </span>
+                            <div className="w-full bg-indigo-500 rounded-t-sm hover:bg-indigo-400 transition-colors" style={{ height: `${Math.max(dia.porcentaje, 5)}%` }}></div>
+                            <span className="text-[10px] font-bold text-slate-400 mt-2 truncate w-full text-center" title={dia.fecha}>{dia.fecha.split('-').slice(1).join('/')}</span>
                           </div>
                         )) : (
                           <div className="w-full h-full flex items-center justify-center text-slate-400 font-medium">Sin datos para graficar</div>
@@ -884,7 +895,6 @@ export default function App() {
                         </table>
                       </div>
                     </div>
-
                   </div>
 
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
@@ -935,7 +945,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- INVENTARIO MAESTRO CON FILTROS TIPO EXCEL (ADMIN Y VENDEDOR) --- */}
+              {/* --- INVENTARIO MAESTRO --- */}
               {activeTab === 'stock' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4 border-b pb-6">
@@ -946,7 +956,6 @@ export default function App() {
                     <button onClick={handleExportCSV} className="bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-4 rounded-lg shadow-md transition-colors flex items-center gap-2 text-sm font-bold"><Download className="w-4 h-4" /> Exportar a Excel</button>
                   </div>
 
-                  {/* BARRA DE FILTROS AVANZADOS TIPO EXCEL */}
                   <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 flex flex-wrap gap-4 items-center">
                     <div className="flex items-center gap-2 w-full sm:w-auto">
                       <Filter className="w-4 h-4 text-slate-400" />
@@ -954,28 +963,24 @@ export default function App() {
                     </div>
                     
                     <div className="flex flex-1 flex-wrap gap-3">
-                      {/* Búsqueda */}
                       <div className="relative flex-1 min-w-[200px]">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
                         <input type="text" placeholder="Buscar por Nombre o SKU..." className="w-full pl-9 pr-3 py-2 bg-white border border-slate-200 rounded-lg outline-none focus:border-indigo-500 text-sm font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
                       </div>
                       
-                      {/* Dropdown Categoría */}
                       <select className="bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 px-3 py-2 outline-none focus:border-indigo-500 min-w-[140px]" value={exportCategory} onChange={(e) => setExportCategory(e.target.value)}>
                         <option value="Todas">Todas las Categorías</option>
                         {categoriasUnicas.map(cat => <option key={cat} value={cat}>{cat}</option>)}
                       </select>
 
-                      {/* Dropdown Marca */}
                       <select className="bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 px-3 py-2 outline-none focus:border-indigo-500 min-w-[140px]" value={filtroInvMarca} onChange={(e) => setFiltroInvMarca(e.target.value)}>
                         <option value="Todas">Todas las Marcas</option>
                         {marcasUnicas.map(m => <option key={m} value={m}>{m}</option>)}
                       </select>
 
-                      {/* Dropdown Estado */}
                       <select className="bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 px-3 py-2 outline-none focus:border-indigo-500 min-w-[140px]" value={filtroInvEstado} onChange={(e) => setFiltroInvEstado(e.target.value)}>
                         <option value="Todos">Cualquier Stock</option>
-                        <option value="Suficiente">Normal (&gt; 5)</option>
+                        <option value="Suficiente">Normal ({">"} 5)</option>
                         <option value="Bajo">Bajo (1 a 5)</option>
                         <option value="Agotado">Agotado (0)</option>
                       </select>
@@ -1058,7 +1063,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- IMPORTAR (SOLO ADMIN) --- */}
+              {/* --- IMPORTAR MASIVO POR EXCEL --- */}
               {activeTab === 'importar' && userRole === 'admin' && (
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
                   <div className="mb-8 border-b pb-6">
@@ -1133,46 +1138,138 @@ export default function App() {
                 </div>
               )}
 
-              {/* --- INGRESO (SOLO ADMIN) --- */}
+              {/* --- MÓDULO AVANZADO DE INGRESO POR LOTES (NUEVO) --- */}
               {activeTab === 'ingreso' && userRole === 'admin' && (
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
-                  <div className="mb-8 border-b pb-6"><h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Ingresar Stock (Manual)</h2></div>
-                  <form onSubmit={handleGuardarIngreso} className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                    <div className="space-y-6">
-                      <div className="grid grid-cols-3 gap-4">
-                        <div className="col-span-2">
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Lote / Importación</label>
-                          <select required value={formIngreso.loteSelect} onChange={e => setFormIngreso({...formIngreso, loteSelect: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"><option value="">Selecciona...</option>{lotesUnicos.map(l => <option key={l} value={l}>{l}</option>)}<option value="+ Nuevo Lote" className="font-bold text-blue-600">+ Crear nuevo lote...</option></select>
-                          {formIngreso.loteSelect === '+ Nuevo Lote' && <input required autoFocus value={formIngreso.loteNuevo} onChange={e => setFormIngreso({...formIngreso, loteNuevo: e.target.value})} className="w-full mt-3 px-4 py-3 border-2 border-blue-200 rounded-xl uppercase" placeholder="Ej: IMP-COREA-05" />}
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Fecha (Opcional)</label>
-                          <input type="date" value={formIngreso.fechaOperacion} onChange={e => setFormIngreso({...formIngreso, fechaOperacion: e.target.value})} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-600" />
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8 animate-in fade-in">
+                  <div className="mb-8 border-b pb-6">
+                    <h2 className="text-2xl font-black text-slate-900 flex items-center gap-3"><TrendingDown className="text-blue-600 w-8 h-8" /> Importar Mercadería (Por Lotes)</h2>
+                    <p className="text-slate-500 text-sm mt-2">Ingresa los costos de Aduanas y Flete de tu factura. El sistema calculará el prorrateo automático y tu precio de venta sugerido.</p>
+                  </div>
+                  
+                  {/* PASO 1: COSTOS GLOBALES */}
+                  <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 mb-6">
+                    <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4"><Calculator className="w-5 h-5 text-blue-500"/> Paso 1: Datos de la Factura de Importación</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                      <div className="lg:col-span-2">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Lote ID</label>
+                        <select value={loteGlobal.loteIdSelect} onChange={e => setLoteGlobal({...loteGlobal, loteIdSelect: e.target.value})} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-blue-500 font-bold text-slate-700"><option value="">Selecciona...</option>{lotesUnicos.map(l => <option key={l} value={l}>{l}</option>)}<option value="+ Nuevo Lote" className="text-blue-600">+ Nuevo Lote...</option></select>
+                        {loteGlobal.loteIdSelect === '+ Nuevo Lote' && <input autoFocus value={loteGlobal.loteIdNuevo} onChange={e => setLoteGlobal({...loteGlobal, loteIdNuevo: e.target.value})} className="w-full mt-2 px-4 py-2 border-2 border-blue-200 rounded-xl uppercase font-bold text-slate-700" placeholder="Ej: IMP-COREA-05" />}
+                      </div>
+                      <div className="lg:col-span-1">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">TC a Soles</label>
+                        <div className="relative">
+                           <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 font-bold">S/</span>
+                           <input type="number" step="0.001" value={loteGlobal.tipoCambio} onChange={e => setLoteGlobal({...loteGlobal, tipoCambio: e.target.value})} className="w-full pl-8 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-blue-500 font-black text-blue-600" />
                         </div>
                       </div>
-                      
-                      <div className="grid grid-cols-3 gap-4">
-                        <div className="col-span-2 relative">
-                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Producto</label>
+                      <div className="lg:col-span-1">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Flete Total ($)</label>
+                        <input type="number" step="0.01" value={loteGlobal.fleteTotalUSD} onChange={e => setLoteGlobal({...loteGlobal, fleteTotalUSD: e.target.value})} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-blue-500" placeholder="0.00" />
+                      </div>
+                      <div className="lg:col-span-1">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Aduanas ($)</label>
+                        <input type="number" step="0.01" value={loteGlobal.aduanasTotalUSD} onChange={e => setLoteGlobal({...loteGlobal, aduanasTotalUSD: e.target.value})} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-blue-500" placeholder="0.00" />
+                      </div>
+                      <div className="lg:col-span-1">
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">IGV ($)</label>
+                        <input type="number" step="0.01" value={loteGlobal.igvTotalUSD} onChange={e => setLoteGlobal({...loteGlobal, igvTotalUSD: e.target.value})} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl outline-none focus:border-blue-500" placeholder="0.00" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* PASO 2: AGREGAR PRODUCTOS */}
+                  <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm mb-6">
+                    <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4"><Package className="w-5 h-5 text-indigo-500"/> Paso 2: Agregar Productos al Lote</h3>
+                    <form onSubmit={handleAddLoteItem} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                       <div className="md:col-span-5 relative">
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Buscar Producto</label>
                           <div className="relative">
                             <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
-                            <input type="text" required={!formIngreso.sku} placeholder="Escribe para buscar..." value={ingresoSearch} onChange={(e) => { setIngresoSearch(e.target.value); setFormIngreso({ ...formIngreso, sku: '' }); setShowIngresoDropdown(true); }} onFocus={() => setShowIngresoDropdown(true)} onBlur={() => setTimeout(() => setShowIngresoDropdown(false), 200)} className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-medium" />
+                            <input type="text" required={!loteItemForm.sku} placeholder="Nombre o SKU..." value={ingresoSearch} onChange={(e) => { setIngresoSearch(e.target.value); setLoteItemForm({ ...loteItemForm, sku: '' }); setShowIngresoDropdown(true); }} onFocus={() => setShowIngresoDropdown(true)} onBlur={() => setTimeout(() => setShowIngresoDropdown(false), 200)} className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:bg-white focus:border-indigo-500 font-medium" />
                           </div>
                           {showIngresoDropdown && (
                             <div className="absolute z-20 w-full mt-2 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-60 overflow-y-auto">
-                              {productosFiltradosIngreso.length > 0 ? productosFiltradosIngreso.map(p => (<div key={p.id} onMouseDown={() => { setFormIngreso({ ...formIngreso, sku: p.sku }); setIngresoSearch(`${p.sku} - ${p.nombre}`); setShowIngresoDropdown(false); }} className={`px-4 py-3 cursor-pointer hover:bg-blue-50 border-b border-slate-50 ${formIngreso.sku === p.sku ? 'bg-blue-50' : ''}`}><div className="font-bold text-slate-800">{p.nombre}</div><div className="text-xs text-slate-500 font-mono mt-0.5">{p.sku}</div></div>)) : <div className="p-4 text-center text-slate-500">No encontrado</div>}
+                              {productosFiltradosIngreso.length > 0 ? productosFiltradosIngreso.map(p => (<div key={p.id} onMouseDown={() => { setLoteItemForm({ ...loteItemForm, sku: p.sku }); setIngresoSearch(`${p.sku} - ${p.nombre}`); setShowIngresoDropdown(false); }} className={`px-4 py-3 cursor-pointer hover:bg-indigo-50 border-b border-slate-50 ${loteItemForm.sku === p.sku ? 'bg-indigo-50' : ''}`}><div className="font-bold text-slate-800">{p.nombre}</div><div className="text-xs text-slate-500 font-mono mt-0.5">{p.sku}</div></div>)) : <div className="p-4 text-center text-slate-500">No encontrado</div>}
                             </div>
                           )}
                         </div>
-                        <div><label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cant.</label><input required type="number" min="1" value={formIngreso.cantidad} onChange={e => setFormIngreso({...formIngreso, cantidad: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none font-black text-center text-lg text-blue-600" /></div>
-                      </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cantidad</label>
+                          <input type="number" required min="1" value={loteItemForm.cantidad} onChange={e => setLoteItemForm({...loteItemForm, cantidad: e.target.value})} className="w-full px-4 py-2.5 border border-slate-200 rounded-xl outline-none font-black text-center" />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">FOB Und ($)</label>
+                          <input type="number" required step="0.01" value={loteItemForm.fobUnitarioUSD} onChange={e => setLoteItemForm({...loteItemForm, fobUnitarioUSD: e.target.value})} className="w-full px-4 py-2.5 border border-slate-200 rounded-xl outline-none" placeholder="0.00" />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Margen (%)</label>
+                          <input type="number" required value={loteItemForm.margen} onChange={e => setLoteItemForm({...loteItemForm, margen: e.target.value})} className="w-full px-4 py-2.5 border border-slate-200 rounded-xl outline-none text-emerald-600 font-bold" />
+                        </div>
+                        <div className="md:col-span-1">
+                          <button type="submit" className="w-full bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-xl h-11 flex items-center justify-center transition-colors"><Plus className="w-5 h-5"/></button>
+                        </div>
+                    </form>
+                  </div>
+
+                  {/* PASO 3: TABLA DE PRORRATEO Y RENTABILIDAD */}
+                  {loteItems.length > 0 && (
+                    <div className="border border-emerald-200 rounded-2xl overflow-hidden animate-in fade-in slide-in-from-bottom-4">
+                       <div className="bg-emerald-50 p-4 border-b border-emerald-200 flex justify-between items-center">
+                          <h3 className="font-black text-emerald-900 text-lg flex items-center gap-2"><TrendingUp className="w-5 h-5"/> Paso 3: Análisis de Rentabilidad y Precios</h3>
+                          <div className="flex items-center gap-2">
+                             <label className="text-xs font-bold text-emerald-700 uppercase">Fecha Op:</label>
+                             <input type="date" value={loteGlobal.fechaOperacion} onChange={e => setLoteGlobal({...loteGlobal, fechaOperacion: e.target.value})} className="px-3 py-1.5 rounded-lg border border-emerald-300 text-sm font-bold text-slate-700 outline-none" />
+                          </div>
+                       </div>
+                       
+                       <div className="overflow-x-auto">
+                          <table className="min-w-full text-sm text-left whitespace-nowrap">
+                             <thead className="bg-white text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-100">
+                                <tr>
+                                   <th className="p-4">Producto</th>
+                                   <th className="p-4 text-center">Cant</th>
+                                   <th className="p-4 text-right">FOB Unit ($)</th>
+                                   <th className="p-4 text-right bg-blue-50/50">Costo Final (S/)<br/><span className="text-[9px] font-normal text-slate-400 lowercase">+Flete+Aduanas (Prorrateado)</span></th>
+                                   <th className="p-4 text-center text-emerald-600">Sugerido (S/)<br/><span className="text-[9px] font-normal text-slate-400 lowercase">Basado en Margen %</span></th>
+                                   <th className="p-4 text-center">Acción</th>
+                                </tr>
+                             </thead>
+                             <tbody className="divide-y divide-slate-100 bg-white">
+                                {loteCalculado.map((item) => (
+                                   <tr key={item.id} className="hover:bg-slate-50">
+                                      <td className="p-4">
+                                         <span className="font-bold text-slate-700 block">{item.nombre}</span>
+                                         <span className="text-[10px] text-slate-400 font-mono">{item.sku}</span>
+                                      </td>
+                                      <td className="p-4 text-center font-black">{item.cantidad}</td>
+                                      <td className="p-4 text-right font-medium text-slate-600">${Number(item.fobUnitarioUSD).toFixed(2)}</td>
+                                      <td className="p-4 text-right font-black text-blue-600 bg-blue-50/30">
+                                         S/ {item.unitCostPEN.toFixed(2)}
+                                      </td>
+                                      <td className="p-4 text-center">
+                                         <span className="bg-emerald-100 text-emerald-800 font-black px-3 py-1.5 rounded-lg text-base shadow-sm border border-emerald-200">
+                                            S/ {item.precioSugerido.toFixed(2)}
+                                         </span>
+                                      </td>
+                                      <td className="p-4 text-center">
+                                         <button onClick={() => handleRemoveLoteItem(item.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>
+                                      </td>
+                                   </tr>
+                                ))}
+                             </tbody>
+                          </table>
+                       </div>
+
+                       <div className="bg-white p-6 border-t border-emerald-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+                          <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 p-3 rounded-xl border border-blue-100">
+                             <Info className="w-5 h-5"/> <div>Los costos de flete, aduanas e IGV se han prorrateado proporcionalmente al valor FOB de cada producto automáticamente usando un TC de <strong>S/ {loteGlobal.tipoCambio}</strong>.</div>
+                          </div>
+                          <button onClick={handleGuardarIngresoLote} className="w-full sm:w-auto px-10 py-4 rounded-xl font-black text-white transition-all shadow-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 flex items-center justify-center gap-2 text-lg">
+                             <TrendingDown className="w-6 h-6"/> Guardar Importación
+                          </button>
+                       </div>
                     </div>
-                    <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 space-y-5">
-                      <h3 className="font-black flex items-center gap-2 text-slate-700 uppercase text-sm border-b pb-3"><Calculator className="w-5 h-5 text-slate-400"/> Costos (S/) <span className="font-normal text-xs text-slate-400 ml-auto">Opcional</span></h3>
-                      <div><label className="block text-xs font-bold text-slate-500 uppercase mb-2">FOB Total del Lote</label><input type="number" step="0.01" value={formIngreso.costoFob} onChange={e => setFormIngreso({...formIngreso, costoFob: e.target.value})} className="w-full px-4 py-3 border border-slate-200 rounded-xl" /></div>
-                    </div>
-                    <div className="md:col-span-2 flex justify-end mt-2"><button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-10 py-4 rounded-xl font-black text-lg">Sumar Stock</button></div>
-                  </form>
+                  )}
                 </div>
               )}
 
